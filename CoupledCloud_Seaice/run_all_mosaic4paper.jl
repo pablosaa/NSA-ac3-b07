@@ -29,8 +29,13 @@ const OUT_CSV = joinpath("data", "csv_nsa")
 
 include("tmp_auxfiles.jl");
 
-datum =( (2019,11), (2019,12), (2020,1), (2020,2), (2020,3), (2020,4))
+datum =( (2018,11), (2018,12), (2019,1), (2019,2), (2019,3), (2019,4))
 days = (1:31) #21  #18 #28 #6
+
+!isempty(ARGS) && foreach(ARGS) do argin
+	ex = Meta.parse(argin)
+	eval(ex)
+end
 
 for (yy,mm) in datum
     for dd in days
@@ -84,7 +89,7 @@ for (yy,mm) in datum
                                  rs[:qv], rs[:θ], rs[:T]);
         
         # 2. Planetary boundary layer height:
-        PBLH = ATMOStools.estimate_Ri_PBLH(Ri[7:end, :], rs[:height][7:end], ξ_ri=1.0);
+        PBLH = ATMOStools.estimate_Ri_PBLH(Ri[7:end, :], rs[:height][7:end], ξ_ri=1.0, Hmax=9f3);
 
         # 3. Vertical gradient of water vapour transport:
         ∇WVT = ATMOStools.calculate_∇WVT(10rs[:Pa], rs[:WSPD], rs[:qv], 1f-3rs[:height]);
