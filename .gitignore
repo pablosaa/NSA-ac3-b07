@@ -28,4 +28,5 @@ Manifest.toml
 # PSG
 *.csv
 *.jl~
+gmt.history
 data/

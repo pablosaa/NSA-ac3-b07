@@ -22,14 +22,15 @@ using ATMOStools
 const CAMPAIGN = "utqiagvik-nsa" # "arctic-mosaic" #
 const DATA_PATH = "/projekt2/ac3data/B07-data" #joinpath(homedir(), "LIM/data/B07")
 const LPR_PATH = joinpath(DATA_PATH, "LP")
-const CLNET_PATH = joinpath(DATA_PATH, CAMPAIGN, "CloudNet", "output")
+const CLNET_PATH = joinpath(DATA_PATH, CAMPAIGN, "CloudNet","1.8.0", "output")
 const CLNET_PRODUCT = "CEIL10m" # "TROPOS/processed/categorize"
 const RS_PATH = joinpath("/projekt2/remsens/data_new/site-campaign", CAMPAIGN)
 const OUT_CSV = joinpath("data", "csv_nsa")
 
 include("tmp_auxfiles.jl");
 
-datum =( (2018,11), (2018,12), (2019,1), (2019,2), (2019,3), (2019,4))
+winter_jahr = 2020;
+#( (winter_jahr,11), (winter_jahr,12), (,1), (2019,2), (2019,3), (2019,4))
 days = (1:31) #21  #18 #28 #6
 
 !isempty(ARGS) && foreach(ARGS) do argin
@@ -37,7 +38,10 @@ days = (1:31) #21  #18 #28 #6
 	eval(ex)
 end
 
-for (yy,mm) in datum
+datum = [Date(winter_jahr, 11)+Month(m) for m ∈ 0:5]
+
+for heute in datum
+    yy, mm = year(heute), month(heute)
     for dd in days
         try
             Date(yy,mm,dd)
@@ -67,17 +71,22 @@ for (yy,mm) in datum
 
         # Reading ARM microwave radiometer file:
         mwr = let nfile=ARMtools.getFilePattern(RS_PATH, "MWR/RET", yy, mm, dd)
-            !isnothing(nfile) && ARMtools.getMWRData(nfile, onlyvars=["time","surface_temp"], addvars=["sonde_times"])
+            !isnothing(nfile) && ARMtools.getMWRData(nfile, onlyvars=["time","surface_temp"]) ## ,addvars=["sonde_times"]) # 20210123 on sonde_launch_status
         end;
 
         # Reading Infrared surface temperatures from ARM
-        tir_filen = ARMtools.getFilePattern(RS_PATH, "GNDIRT", yy, mm, dd)
+        tir_filen = try
+            ARMtools.getFilePattern(RS_PATH, "GNDIRT", yy, mm, dd)
+        catch e
+            println(e)
+            nothing
+        end
         tir = !isnothing(tir_filen) ? ARMtools.getGNDIRTdata(tir_filen) : Dict(:time=>mwr[:time], :IRT=> mwr[:SFT])
 
 
         # Reading Radiosonde data from ARM NSA
         rs_filen = ARMtools.getFilePattern(RS_PATH, "INTERPOLATEDSONDE", yy, mm, dd)
-        rs = ARMtools.getSondeData(rs_filen);
+        !isnothing(rs_filen) ? rs = ARMtools.getSondeData(rs_filen) : (@warn "No Radiosonde $(heute)"; continue)
 
         typeof(tir)<:Dict && ARMtools.attach_Tₛ!(rs, tir[:IRT].-273.15, tir[:time]);
         rs[:height][end] < 45 && (rs[:height] .*= 1f3)  # converting km to m 

@@ -20,7 +20,7 @@ const RVNAV_PATH = joinpath(homedir(), "LIM/data/B07/arctic-mosaic");
 const LATLON_FILE = joinpath(PROD_PATH, "amsr2", "LongitudeLatitudeGrid-n3125-ChukchiBeaufort.h5");
 const DATOUT_PATH = joinpath(homedir(), "LIM/scripts/NSA-ac3-b07/CoupledCloud_Seaice/data");
 const R_lim = 50e3;   # radius around RV polarstern
-const MAKEPLOTS = true
+const MAKEPLOTS = false
 
 # Define coordinates for the North Slope Alaska site:
 nsa_lat = 71.323e0;
@@ -34,7 +34,7 @@ dist_wdir = Dict(data=>Dict() for data ∈ PRODUCTS)
 #mm = 4
 #dd = 15
 
-datum = ((11,2019), (12,2019), (1,2020), (2,2020), (3,2020), (4,2020)) 
+datum = ((12,2020), (1,2021), (2,2021), (3,2021), (4,2021)) #(11,2021), 
 days = (1:31)
 
 !isempty(ARGS) && foreach(ARGS) do argin
