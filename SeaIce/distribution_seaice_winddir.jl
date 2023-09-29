@@ -18,13 +18,17 @@ SEAICE = include(joinpath(homedir(), "LIM/repos/SEAICEtools.jl/src/SEAICEtools.j
 const PROD_PATH = "/projekt2/ac3data/B07-data/SeaIce";  # joinpath(homedir(), "LIM/data/B07/SeaIce");
 const RVNAV_PATH = joinpath(homedir(), "LIM/data/B07/arctic-mosaic");
 const LATLON_FILE = joinpath(PROD_PATH, "amsr2", "LongitudeLatitudeGrid-n3125-ChukchiBeaufort.h5");
-const DATOUT_PATH = joinpath(homedir(), "LIM/scripts/NSA-ac3-b07/CoupledCloud_Seaice/data");
+const DATCSV_PATH = joinpath(homedir(), "LIM/scripts/NSA-ac3-b07/CoupledCloud_Seaice/data");
+const DATOUT_PATH = joinpath(homedir(), "LIM/scripts/NSA-ac3-b07/SeaIce/data"); ## old: CoupledCloud_Seaice/data");
 const R_lim = 50e3;   # radius around RV polarstern
 const MAKEPLOTS = false
 
 # Define coordinates for the North Slope Alaska site:
 nsa_lat = 71.323e0;
 nsa_lon = -156.609e0;
+# Define the angular sector to consider (avoiding Land):
+θₗ₀ = 235e0;
+θₗ₁ = 110e0;
 
 PRODUCTS = (:SIC,) # (:DIV, :LF, :SIC)
 
@@ -34,7 +38,7 @@ dist_wdir = Dict(data=>Dict() for data ∈ PRODUCTS)
 #mm = 4
 #dd = 15
 
-datum = ((12,2020), (1,2021), (2,2021), (3,2021), (4,2021)) #(11,2021), 
+datum = ((11,2021), (12,2021), (1,2022), (2,2022), (3,2022), (4,2022)) #(11,2021), 
 days = (1:31)
 
 !isempty(ARGS) && foreach(ARGS) do argin
@@ -69,7 +73,7 @@ for data ∈ PRODUCTS
     elseif data==:LF
         1, (0, 0.4, 0.025), 0.1, :davos, (0, 1), 0.07
     elseif data==:SIC
-        1, (70, 100, 2.5), 5, :vik, (-1, 0),  0.27
+        1, (0, 100, 5), 5, :vik, (-1, 0),  0.27
     else
         @error "given data key $(data) not supported"
     end
@@ -86,7 +90,7 @@ for data ∈ PRODUCTS
 
     # Reading wind direction of the day
     csv_winddir = let fn = @sprintf("%04d/winddir_%04d%02d%02d_I.csv", yy, yy, mm, dd)
-        full_fn = joinpath(DATOUT_PATH, "csv_nsa", fn) 
+        full_fn = joinpath(DATCSV_PATH, "csv_nsa", fn) 
     end
 
     !isfile(csv_winddir) && (@warn "$(csv_winddir) not found!"; continue)
@@ -105,8 +109,16 @@ for data ∈ PRODUCTS
              :freq=>fill(NaN32, length(tmp)-1, ndat),
              :μ => fill(NaN32, ndat),
              :σ => fill(NaN32, ndat),
-             :qq=> fill(NaN32, 5, ndat)
-             )
+             :qq=> fill(NaN32, 5, ndat),
+             :Afreq=>fill(NaN32, length(tmp)-1, ndat),
+             :Aμ => fill(NaN32, ndat),
+             :Aσ => fill(NaN32, ndat),
+             :Aqq=> fill(NaN32, 5, ndat),
+             :Rfreq=>fill(NaN32, length(tmp)-1, ndat),
+             :Rμ => fill(NaN32, ndat),
+             :Rσ => fill(NaN32, ndat),
+             :Rqq=> fill(NaN32, 5, ndat),
+                )
     end
     
     dat_coor = if data == :SIC
@@ -166,7 +178,6 @@ for data ∈ PRODUCTS
 
             # getting wind direction where to extract:
             θᵢ = winddir[iti, :wvtdir]-3; θₑ = winddir[iti, :wvtdir]+3;
-
             
             idx_wd = findall((θᵢ .≤ θ .≤ θₑ) .& (ρ .≤ 50));  #!!! [idx_box]
 
@@ -195,7 +206,38 @@ for data ∈ PRODUCTS
             dist_wdir[data][:μ][iti] = μLF
             dist_wdir[data][:σ][iti] = σLF
             dist_wdir[data][:qq][:, iti] = qqLF
-        
+            
+            # Adding SIC statistics for the whole sector:
+            idx_A=findall((θ.≥ θₗ₀ .|| θ.≤ θₗ₁) .& (ρ .≤ 50));
+            Aμsic, Aσsic, Aqqsic = stats_𝑁ₗᵤ(filter(!isnan, sar[data][idx_A]), L=0, U=100)
+           
+            dist_wdir[data][:Aμ][iti] = Aμsic
+            dist_wdir[data][:Aσ][iti] = Aσsic
+            dist_wdir[data][:Aqq][:, iti] = Aqqsic
+            dist_wdir[data][:Afreq][:, iti] = let Hdat=fit(Histogram,
+                                                          sar[data][idx_A],
+                                                          dist_wdir[data][:bins],
+                                                          closed=:right)
+                Hdat.weights
+            end
+            # Adding SIC sector from random direction:
+            θᵢ, θₑ = let wvtdir = 359e0rand(1)[1]
+                wvtdir-3, wvtdir+3
+            end
+            idx_rnd = findall((θᵢ .≤ θ .≤ θₑ) .& (ρ .≤ 50));
+            Rμsic, Rσsic, Rqqsic = stats_𝑁ₗᵤ(filter(!isnan, sar[data][idx_rnd]), L=0, U=100)
+           
+            dist_wdir[data][:Rμ][iti] = Rμsic
+            dist_wdir[data][:Rσ][iti] = Rσsic
+            dist_wdir[data][:Rqq][:, iti] = Rqqsic
+            dist_wdir[data][:Rfreq][:, iti] = let Hdat=fit(Histogram,
+                                                          sar[data][idx_rnd],
+                                                          dist_wdir[data][:bins],
+                                                          closed=:right)
+                Hdat.weights
+            end
+
+            #
             !MAKEPLOTS && continue
             mod(iti,360) != 0 && continue
             # finding the RVtrack point for the given date:

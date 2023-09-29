@@ -25,9 +25,9 @@ begin
 	using StatsBase
 	using LaTeXStrings
 	using Distributions
-        using LsqFit
-        using JLD2
-        using Printf
+    using LsqFit
+    using JLD2
+    using Printf
 	using PrettyTables
 	using PlutoUI
 end
@@ -78,12 +78,17 @@ end;
 
 # ╔═╡ 020695a4-61ee-49f5-8e39-4256ca836183
 DB = let tmp = filter(𝐷->(𝐷.cth-𝐷.cbh)<(3f3) && !ismissing(𝐷.coupled), DBraw) #𝐷.μSIC>(0.0) mwvt>(0)  && 𝐷.μLF>(0.0)
+	disallowmissing!(tmp, :coupled, error=false)
 	filter!(𝐷-> 𝐷.wvtdir≥θ₀ || 𝐷.wvtdir≤θ₁, tmp)
+	tmp.ier *= 1e6
 	ii = findall((tmp.lwp .< 5) .&& (tmp.iwp .<5))
 	tmp.lwp[ii] .= 0.0
 	tmp.iwp[ii] .= 0.0
 	tmp
 end;
+
+# ╔═╡ 6440722f-ba4f-4703-9515-e00a1dad77d4
+typeof(DB.coupled)
 
 # ╔═╡ ae59d379-b47d-41fc-8958-4e9e1941b528
 filter(D-> D.wvtdir≥θ₀ || D.wvtdir≤θ₁, DBraw) |> D->length(D.date)
@@ -93,6 +98,11 @@ filter(D-> (D.cth - D.cbh)≤(3f3) , DB).date |> length #&& && D.coupled==(true)
 
 # ╔═╡ 9fe20fcc-8de8-4f4c-aff2-214797c40ba0
 Ndat = Dict(:co=>reduce(+, DB.coupled), :de=>reduce(+, .!DB.coupled)); pretty_table(HTML, Ndat)
+
+# ╔═╡ 89809ea8-94a4-4158-8f23-b4a2322532b2
+md"""
+##### Which SIC estimation should be used? : $(@bind sicvar Select([:μSIC, :RμSIC, :AμSIC]))
+"""
 
 # ╔═╡ db52e7c0-5a8c-454a-bf1e-df9d377eff25
 md"""
@@ -110,7 +120,7 @@ begin
 	DB[!, :Γ] = @. -(DB.cldTT - DB.cldLT)/DB.δₕ/1f-3
 	# Cloud phase fraction:
 	DB[!, :χᵢ] = DB.iwp./(DB.lwp .+ DB.iwp)
-	DB[!, :lf₀] = (DB.μSIC .< sic₀)
+	DB[!, :lf₀] = (DB[!, sicvar] .< sic₀)
 	
 end;
 
@@ -141,8 +151,31 @@ md"""
 ###### Select only SIC<90 ? $(@bind lf002 confirm(CheckBox(true)))
 """
 
+# ╔═╡ bc815051-eb29-4759-ab3f-09a237452c5c
+##md"""
+###### Select winter time to analyze: $(@bind TG Select([
+##(Date(2012,11,1),Date(2013,4,30))=>"2012-2013",(Date(2013,11,1),Date(2014,4,30))=>"2013-2014",(Date(2014,11,1),Date(2015,4,30))=>"2014-2015",(Date(2014,11,1),Date(2015,4,30))=>"2014-2015",(Date(2015,11,1),Date(2016,4,30))=>"2015-2016",(Date(2016,11,1),Date(2017,4,30))=>"2016-2017",(Date(2017,11,1),Date(2018,4,30))=>"2017-2018",(Date(2018,11,1),Date(2019,4,30))=>"2018-2019",(Date(2019,11,1),Date(2020,4,30))=>"2019-2020",(Date(2020,11,1),Date(2021,4,30))=>"2020-2021",(Date(2021,11,1),Date(2022,4,30))=>"2021-2022"]))
+##"""
+
 # ╔═╡ 3af8f75f-0c94-4b4a-af8b-14d90585bd25
 χice(T, β) = @. 0.5(1+tanh(-β[1]*(T-β[2]))) #1-1/(1+exp(.3(-T-25))) #
+
+# ╔═╡ 3b1bd823-83bb-4630-be82-26b08c90f45a
+begin
+	lfsplt = plot()
+	# Coopman et al. fit:
+	##@df CPF plot!(:T, χice(:T, [0.18, -18]), lw=2, lc=:bone, label="Coopman et al.(2018)")
+	# Fit to coupled data:
+	@df CPF plot!(:T, x->χice(x, χfit.param), lw=2, lc=farben[2], ls=:dash, label="Best fit-model") #[0.09, -25]
+	# Iso-line at -15 C max supersaturation:
+	vline!([-15], ls=:dash, lc=:skyblue, lw=3, label="T = -15 °C")
+	# binned data for decoupled and coupled:
+	@df CPF plot!(:T, :μχᵢ, ribbon=:σχᵢ, lw=0.5, group=:coupled, m=[:^ :o], ms=[5 5], markerstrokewidth=.5, color=farben, fillalpha=.3, xflip=false, xlim=(-51, 1), framestyle=:box, label=["decoupled ± σ" "coupled ± σ"], legend=:bottomleft, xlab="Cloud Top Temperature / °C", ylab="Ice fraction "*L"\chi_{ice}", guidefontsize=16,legendfontsize=12, tickfontsize=13, minorticks=true, tickdir=:out)
+	# top histogram: Note, when LF->all ylim=(0, 21.2f3) and legend=:toprigth, when LF>0.02 ylim=(0, 2.2f3) and no legend
+	hist_ytick = (lf002 ? (0:1f4:4.5f4) : (0:5f4:25.1f4))
+	hcpf = @df CPF plot(:T, [:Nw :Ni], group=:coupled, l=[:bar :steppre :bar :steppre], ls=:solid, lw=3, lc=[false farben[1] false farben[2]], bar_width=[0.9 0.4 0.4], fillcolor=[farben farben[2]], fillalpha=[0.9 0.7 0.7], xlim=(-51, 1), yscale=:identity, yticks=hist_ytick, yaxis=(formatter=y->@sprintf("%1.1f",1f-3y)), yguidefontsize=12, ytickfontsize=12, ylim=extrema(:Ni).*(1,1.05), xflip=false, xtickfontcolor=:gray, bottom_margins=-8Plots.mm, ylab="# x 10⁴", tickdir=:out, minorticks=true, ann=(-4, hist_ytick[end-1], text(lf002 ? "(b)" : "(a)", 20)), legend=:topleft, background_color_legend=nothing, foreground_color_legend=nothing, label=["2x  liquid (de)" "2x  Ice (de)" "liquid (co)" "Ice (co)"], top_margins=3Plots.mm) #[false :royalblue2 false :orange] [:royalblue2 :orange :orange], ylim=(0, 1.5f4)
+	plot(hcpf, lfsplt, layout=@layout([a{0.2h}; b]), size=(700, 550), left_margins=3Plots.mm)
+end
 
 # ╔═╡ e1f28ccb-e252-4b44-95a3-4ffce7d45455
 begin
@@ -184,6 +217,12 @@ reff_plt = @df filter(c->1<c.der<150, DB) density(:der, group=(:lf₀, :coupled)
 
 # ╔═╡ 07d4b3f0-d37e-4b5a-ae8f-46033e57b112
 ieff_plt = @df filter(c->1<c.ier<150, DB) density(:ier, group=(:lf₀, :coupled), label=hinweistext, lc=farben, linealpha=[.7 .7 1 1], l=[:dash :dash :solid :solid], xlim=(0, 70), xlabel=L"\mathrm{Ice}~~\overline{r}_{eff}~ /~~\mathrm{\mu~m}", ylabel="PDF", trim=false, lw=[2 2 4 4], frame_style=:box, tickdir=:out,  minorticks=true, tickfontsize=13, guidefontsize=15, legendfontsize=12, size=(500,500), legend=:topleft)
+
+# ╔═╡ 76c14688-0be1-43a5-932e-352ebac308b4
+extrema(filter(!isnan, DB.ier))
+
+# ╔═╡ 700b9f2a-1e4d-4d30-a57e-06f067d2db93
+typeof(DB.ier)
 
 # ╔═╡ 6b11b88f-66e4-4630-a9a0-bc479cda43e1
 # Collecting the data into fixed bin sets for LF and SIC:
@@ -236,9 +275,13 @@ begin
 	for (i, T) in enumerate(Tin)
 		T0 = 273.15 + T-1.2ΔT #T + 273.15
 		T1 = 273.15 + T+1.2ΔT #T + 273.15 + 5
-		# For coupled:
-		DD=filter(R->T0≤R.cldTT<T1 && R.coupled==(true) && (R.lf₀ || ~lf002), DB)
 		
+		## DD=filter(R->T0≤R.cldTT<T1 && R.coupled==(true) && (R.lf₀ || ~lf002) && TG[1]≤R.date≤TG[2], DB)
+		
+		DD0 = filter(R->T0≤R.cldTT<T1 && (R.lf₀ || ~lf002), DB)  ##  && TG[1]≤R.date≤TG[2]
+		
+		# For coupled:
+		DD = filter(R->R.coupled, DD0) 
 		CPF[2i-1, :μχᵢ], CPF[2i-1, :σχᵢ] = Nlu(DD.χᵢ, L=0, U=1)
 		CPF[2i-1, :coupled] = true
 		CPF[2i-1, :T] = T #mean(DD.cldTT)-273.15 #T
@@ -248,7 +291,7 @@ begin
 		CPF[2i-1, :Ni] = filter(!isnan, DD.iwp) |> length
 
 		# For decoupled:
-		DD=filter(R->T0≤R.cldTT<T1 && R.coupled==(false) && (R.lf₀ || ~lf002), DB)
+		DD=filter(R->!R.coupled, DD0)
 		CPF[2i, :μχᵢ], CPF[2i, :σχᵢ] = Nlu(DD.χᵢ, L=0, U=1)
 		CPF[2i, :coupled] = false
 		CPF[2i, :T] = T #mean(DD.cldTT)-273.15 #T
@@ -269,23 +312,6 @@ end
 
 # ╔═╡ 4da11521-ba51-406a-ae1e-02d9355fbc29
 χfit.param
-
-# ╔═╡ 3b1bd823-83bb-4630-be82-26b08c90f45a
-begin
-	lfsplt = plot()
-	# Coopman et al. fit:
-	##@df CPF plot!(:T, χice(:T, [0.18, -18]), lw=2, lc=:bone, label="Coopman et al.(2018)")
-	# Fit to coupled data:
-	@df CPF plot!(:T, x->χice(x, χfit.param), lw=2, lc=farben[2], ls=:dash, label="Best fit-model") #[0.09, -25]
-	# Iso-line at -15 C max supersaturation:
-	vline!([-15], ls=:dash, lc=:skyblue, lw=3, label="T = -15 °C")
-	# binned data for decoupled and coupled:
-	@df CPF plot!(:T, :μχᵢ, ribbon=:σχᵢ, lw=0.5, group=:coupled, m=[:^ :o], ms=[5 5], markerstrokewidth=.5, color=farben, fillalpha=.3, xflip=false, xlim=(-51, 1), framestyle=:box, label=["decoupled ± σ" "coupled ± σ"], legend=:bottomleft, xlab="Cloud Top Temperature / °C", ylab="Ice fraction "*L"\chi_{ice}", guidefontsize=16,legendfontsize=12, tickfontsize=13, minorticks=true, tickdir=:out)
-	# top histogram: Note, when LF->all ylim=(0, 21.2f3) and legend=:toprigth, when LF>0.02 ylim=(0, 2.2f3) and no legend
-	hist_ytick = (lf002 ? (0:1f4:4.5f4) : (0:5f4:25.1f4))
-	hcpf = @df CPF plot(:T, [:Nw :Ni], group=:coupled, l=[:bar :steppre :bar :steppre], ls=:solid, lw=3, lc=[false farben[1] false farben[2]], bar_width=[0.9 0.4 0.4], fillcolor=[farben farben[2]], fillalpha=[0.9 0.7 0.7], xlim=(-51, 1), yscale=:identity, yticks=hist_ytick, yaxis=(formatter=y->@sprintf("%1.1f",1f-3y)), yguidefontsize=12, ytickfontsize=12, ylim=extrema(:Ni).*(1,1.05), xflip=false, xtickfontcolor=:gray, bottom_margins=-8Plots.mm, ylab="# x 10⁴", tickdir=:out, minorticks=true, ann=(-4, hist_ytick[end-1], text(lf002 ? "(b)" : "(a)", 20)), legend=:topleft, background_color_legend=nothing, foreground_color_legend=nothing, label=["2x  liquid (de)" "2x  Ice (de)" "liquid (co)" "Ice (co)"], top_margins=3Plots.mm) #[false :royalblue2 false :orange] [:royalblue2 :orange :orange], ylim=(0, 1.5f4)
-	plot(hcpf, lfsplt, layout=@layout([a{0.2h}; b]), size=(700, 550), left_margins=3Plots.mm)
-end
 
 # ╔═╡ bbc95bb1-a296-4409-93be-ecf3c83c1153
 (0:5f2:2.2f3), extrema(CPF.Nw)
@@ -313,7 +339,7 @@ begin
 	within(V; lims=(0, Inf)) = lims[1] ≤ V < lims[2]
 	
 	dat = let tmp = Dict()
-            tmp[:de] = Dict(Symbol(x,y)=>fill(NaN32, Nbins) for x in [:μSIC, :σSIC] for y in VARIN) |> DataFrame
+        tmp[:de] = Dict(Symbol(x,y)=>fill(NaN32, Nbins) for x in [:μSIC, :σSIC] for y in VARIN) |> DataFrame
 		tmp[:co] = Dict(Symbol(x,y)=>fill(NaN32, Nbins) for x in [:μSIC, :σSIC] for y in VARIN) |> DataFrame
 		## tmp[:de].NNlf = fill(0, Nbins)
 		## tmp[:co].NNlf = fill(0, Nbins)
@@ -353,12 +379,12 @@ begin
 				sic_edgs = (sic_bin[i] - δsic, sic_bin[i] + δsic)   # -/+ 0.75
 				# filling with IWP (decoupled):
 				tmp[:de][i,Symbol(:μSIC,y)], tmp[:de][i,Symbol(:σSIC,y)], tmp[:de][i, :sic_var], tmp[:de][i, :NNsic] = let
-					F = filter(V->within.(V.μSIC, lims=sic_edgs) .&& within.(V[y], lims=var_lim[y]) .&& (V.coupled==(false)), DB)
+					F = filter(V->within.(V[sicvar], lims=sic_edgs) .&& within.(V[y], lims=var_lim[y]) .&& (V.coupled==(false)), DB)
 					isempty(F) ? (NaN32, NaN32, NaN32,0) : (Nlu(eval(:($F.$y)))..., fσₑᵣ(F.σSIC), Zahlen(F.μSIC) )
 				end
 				# filling with IWP (coupled):
 				tmp[:co][i,Symbol(:μSIC,y)], tmp[:co][i,Symbol(:σSIC,y)], tmp[:co][i, :sic_var], tmp[:co][i, :NNsic] = let
-					F = filter(V->within.(V.μSIC, lims=sic_edgs) .&& within.(V[y], lims=var_lim[y]) .&& (V.coupled==(true)), DB)
+					F = filter(V->within.(V[sicvar], lims=sic_edgs) .&& within.(V[y], lims=var_lim[y]) .&& (V.coupled==(true)), DB)
 					isempty(F) ? (NaN32, NaN32, NaN32, 0) : (Nlu(eval(:($F.$y)))..., fσₑᵣ(F.σSIC), Zahlen(F.μSIC) )
 				end
 				#
@@ -387,11 +413,17 @@ rfit, R², Δβ = let VARICE = [:μSIC]  ## :μLF,
     tmp = Dict()
 	r2 = Dict()
 	con = Dict()
-	Y=filter(D->D.coupled==(true), dat) #tmp[:co].μLFlwp
+        foreach(Dict(:co=>true, :de=>false)) do (i, co_status)
+	Y=filter(D->D.coupled==(co_status), dat) #tmp[:co].μLFlwp
 		
+        r2[i] = Dict()
+        tmp[i] = Dict()
+        con[i] = Dict()
+
 	foreach(VARICE) do ice
 		foreach(VARIN) do S
 			var = Symbol(ice, S)
+
 			err = replace(String(var), "μ"=>"σ") |> Symbol
 			NNice = replace(lowercase(String(ice)), "μ"=>"NN") |> Symbol
 			println(var)
@@ -402,20 +434,21 @@ rfit, R², Δβ = let VARICE = [:μSIC]  ## :μLF,
 			𝑆ₑᵣᵣ = @. 1/Y[ii, err]^2 #@. Y[ii, err]/Yin/sqrt(Y[ii, NNice] .-1)
 			𝑛 = length(ii)
 			ωᵢ = @. 𝑛*𝑆ₑᵣᵣ/sum(𝑆ₑᵣᵣ) #sqrt(𝑆ₑᵣᵣ/𝑛) #
-			tmp[var] = if ice==:μLF
+            tmp[i][var] = if ice==:μLF
 				curve_fit(fᵢ, Xin, Yin, [50, .5]) # ωᵢ, tmp[:co].lf_bin[ii], Y[ii] , [10, .5])
 			else
 				curve_fit(fₛ, Xin, Yin, [100, 1.0]) #ωᵢ, 
 			end
-			r2[var] = cor(Xin, Yin)^2
+            r2[i][var] = cor(Xin, Yin)^2
 			try
-				con[var] = confidence_interval(tmp[var], 0.05) |> X->[[X[1][1], X[2][1]], [X[1][2], X[2][2]]]
+                con[i][var] = confidence_interval(tmp[i][var], 0.05) |> X->[[X[1][1], X[2][1]], [X[1][2], X[2][2]]]
 			catch e
 				println(e)
-				println(tmp[var].param, " ", length(ii))
+				println(tmp[i][var].param, " ", length(ii))
 			end
 		end
 	end
+    end  # end over co_status
 	tmp, r2, con
 end
 
@@ -423,16 +456,25 @@ end
 R² 
 
 # ╔═╡ 62deee04-af96-486a-a5fb-d8c9fbf4db5e
-Δβ
+rfit[:co]
 
 # ╔═╡ c21c2ffd-e195-4dd3-a4b1-8aaf76575d4f
 ## jldsave("stats_fit_lwp_iwp_II.jld2"; rfit, R², Δβ)
 
 # ╔═╡ a48a0a1a-403b-4e3c-9ce6-618a1ceb1eaa
-rfit[:μSICiwp].param
+rfit[:co][:μSIClwp].param, rfit[:de][:μSIClwp].param
+
+# ╔═╡ 848150e8-f3ed-4324-9964-8a6ada5df1ce
+@bind ss Select([:co, :de], default=:co)
 
 # ╔═╡ f4e1159d-37ac-47b0-89ff-a9581aa3875f
-rfit[:μSIClwp].param , margin_error(rfit[:μSIClwp]), fₛ([20,10,0], rfit[:μSIClwp].param)
+rfit[ss][:μSIClwp].param , margin_error(rfit[ss][:μSIClwp]), fₛ([20,10,0], rfit[ss][:μSIClwp].param)
+
+# ╔═╡ 045d019e-9817-4bcc-8af8-6882ad43c615
+Δβ[:de][:μSIClwp], rfit[:de][:μSIClwp].param
+
+# ╔═╡ d4460a57-4e72-4c4c-9026-50493ace7735
+plot(fₛ((100:-5:0),rfit[:de][:μSIClwp].param))
 
 # ╔═╡ aab6bedd-c076-491f-b590-852f179e860b
 begin
@@ -442,8 +484,8 @@ begin
 	lf_lim = (-0.02, .55)
 	sic_lim = (7, 101) #(78, 101)
 	lf_xin = (.02:0.02:0.6)
-	sic_xin = (10:5:100) #(75:100)
-	NNcol = cgrad(:starrynight, 15, categorical=true, alpha=0.7, rev=true, scale=:log10); #:grayyellow
+	sic_xin = (5:5:100) #(75:100)
+	NNcol = cgrad(:starrynight, 15, categorical=true, alpha=0.5, rev=true, scale=:log10); #:grayyellow
 	NNlim =(10, 1.5f3)
 	# row LWP vs LF XXX
 	## a0 = @df filter(r->r.lwp>(0), DBraw) histogram2d(:μLF, :lwp, bins=30, color=NNcol, colorbar=false, colorbar_scale=:log10, ylim=(-10, 300), xlim=lf_lim, clim=NNlim); #ylim=(-15, 250),
@@ -455,11 +497,17 @@ begin
 	# for LWP (coupled):
 	
 	# LWP vs SIC
-	a1 = @df filter(r->r.lwp>(0), DBraw) histogram2d(:μSIC, (:lwp), bins=(60,200), color=NNcol, colorbar=false, colorbar_scale=:log10, ylim=(-15, 300), xlim=sic_lim, xflip=true, clim=NNlim );
+	a1 = @df filter(r->r.lwp>(0), DBraw) histogram2d(:μSIC, (:lwp), bins=(60,200), color=NNcol, colorbar=false, colorbar_scale=:log10, ylim=(-15, 250), xlim=sic_lim, xflip=true, clim=NNlim );
 	# for LWP (decoupled):
-	@df dat scatter!(:sic_bin, :μSIClwp, xerror=:sic_var, yerror=:σSIClwp, group=:coupled, label="", mc=farben, markerstrokecolor=:grey4, msw=1, lc=farben, lw=1.5, la=0.5, marker=([:^ :o], 5, 0.9), ylabel="LWP / g m⁻²", xflip=true, xticks=(sic_xin[1:2:end], ""))
-	sic_yin = fₛ(sic_xin, rfit[:μSIClwp].param)
-	plot!(sic_xin, sic_yin , ribbon=(sic_yin .- fₛ(sic_xin, Δβ[:μSIClwp][1]), fₛ(sic_xin, Δβ[:μSIClwp][2]) .- sic_yin), lc=:black, lw=2, la=.7, fillalpha=0.3, label="", ann=(88, 280, @sprintf("r²=%3.2f", R²[:μSIClwp])))
+	
+	sic_yin = fₛ(sic_xin, rfit[:co][:μSIClwp].param)
+	plot!(sic_xin, sic_yin , ribbon=(sic_yin .- fₛ(sic_xin, Δβ[:co][:μSIClwp][1]), fₛ(sic_xin, Δβ[:co][:μSIClwp][2]) .- sic_yin), lc=:blue, lw=2, la=.7, fillalpha=0.5, fillcolor=farben[2], label="", ann=(88, 200, text(@sprintf("r²=%3.2f", R²[:co][:μSIClwp]), farben[2])))
+
+	sic_yin = fₛ(sic_xin, rfit[:de][:μSIClwp].param)
+	plot!(sic_xin, sic_yin , ribbon=(sic_yin .- fₛ(sic_xin, Δβ[:de][:μSIClwp][1]), fₛ(sic_xin, Δβ[:de][:μSIClwp][2]) .- sic_yin), lc=:red, lw=2, la=.7, fillalpha=0.5, fillcolor=farben[1], label="", ann=(28, 200, text(@sprintf("r²=%3.2f", R²[:de][:μSIClwp]), farben[1])))
+	
+	@df dat scatter!(:sic_bin, :μSIClwp, xerror=:sic_var, yerror=:σSIClwp, group=:coupled, label="", mc=farben, markerstrokecolor=:grey4, msw=1, lc=farben, lw=1.5, la=0.5, marker=([:^ :o], 5, 0.9), ylabel="LWP / g m⁻²", xflip=true, xticks=(sic_xin[1:2:end], ""), ylim=(-15, 250))
+	
 	#
 	# for LWP (coupled):
 	#@df dat[:co] scatter!(:sic_bin, :μSIClwp, xerror=:sic_var, yerror=:σSIClwp, label="", mc=:dodgerblue1, markerstrokecolor=:royalblue, lc=:royalblue, lw=2.5, la=0.5, ms=6, marker=:circle)
@@ -477,9 +525,12 @@ begin
 	# IWP vs SIC
 	b1 = @df filter(r->r.iwp>(0), DBraw) histogram2d(:μSIC, :iwp, bins=(60,500), color=NNcol, colorbar=false, colorbar_scale=:log10, ylim=(-10, 210), xlim=sic_lim, clim=NNlim);
 	# for IWP (decoupled):
-	@df dat scatter!(:sic_bin, :μSICiwp, xerror=:sic_var, yerror=:σSICiwp, group=:coupled, label="", mc=farben, markerstrokecolor=:grey5, lc=farben, lw=1.5, la=0.5, marker=([:^ :o], 5, 0.9), xlabel="SIC [%]", ylabel="IWP / g m⁻²", legend=:topright, legendfontsize=9, xflip=true, xticks=sic_xin[1:2:end])
-	sic_yin = fₛ(sic_xin, rfit[:μSICiwp].param)
-	plot!(sic_xin, sic_yin , ribbon=(sic_yin .- fₛ(sic_xin, Δβ[:μSICiwp][1]), fₛ(sic_xin, Δβ[:μSICiwp][2]) .- sic_yin), lc=:black, lw=2, la=.7, fillalpha=0.3, label="", ann=(88, 50, @sprintf("r²=%3.2f", R²[:μSICiwp])), top_margins=-4Plots.mm)
+	@df dat scatter!(:sic_bin, :μSICiwp, xerror=:sic_var, yerror=:σSICiwp, group=:coupled, label="", mc=farben, markerstrokecolor=:grey5, lc=farben, lw=1.5, la=0.5, marker=([:^ :o], 5, 0.9), xlabel="SIC [%]", ylabel="IWP / g m⁻²", legend=:topright, legendfontsize=9, xflip=true, xticks=sic_xin[1:2:end], ylim=(10, 300))
+	sic_yin = fₛ(sic_xin, rfit[:co][:μSICiwp].param)
+	plot!(sic_xin, sic_yin , ribbon=(sic_yin.-fₛ(sic_xin, Δβ[:co][:μSICiwp][1]), fₛ(sic_xin, Δβ[:co][:μSICiwp][2]).-sic_xin), lc=:blue, lw=2, la=.7, fillalpha=0.3, label="", ann=(88, 150, text(@sprintf("r²=%3.2f", R²[:co][:μSICiwp]), color=farben[2])), top_margins=-4Plots.mm)
+
+	sic_yin = fₛ(sic_xin, rfit[:de][:μSICiwp].param)
+	plot!(sic_xin, sic_yin , ribbon=(sic_yin .- fₛ(sic_xin, Δβ[:de][:μSICiwp][1]), fₛ(sic_xin, Δβ[:de][:μSICiwp][2]) .- sic_yin), lc=:red, lw=2, la=.7, fillalpha=0.3, label="", ann=(28, 150, text(@sprintf("r²=%3.2f", R²[:de][:μSICiwp]), color=farben[1])), top_margins=-4Plots.mm)
 	
 	
 	# for IWP (coupled):
@@ -495,15 +546,15 @@ begin
 	c1 = @df filter(r->r.der>(0), DB) histogram2d(:μSIC, :der, bins=(50, 300), color=NNcol, colorbar=false, colorbar_scale=:log10 , ylim=(0, 50), xlim=sic_lim, clim=NNlim);
 	# for Der:
 	@df dat scatter!(:sic_bin, :μSICder, xerror=:sic_var, yerror=:σSICder, group=:coupled, label="", mc=farben, ylabel="droplet r_eff", markerstrokecolor=:grey7, msw=1, lc=farben, lw=1.5, la=0.5, marker=([:^ :o], 5, 0.9), xflip=true )
-	plot!(sic_xin, x->fₛ(x, rfit[:μSICder].param), lc=:black, lw=2, la=.5, label="")
+	plot!(sic_xin, x->fₛ(x, rfit[ss][:μSICder].param), lc=:black, lw=2, la=.5, label="")
 
 	# Ier vs SIC
 	d1 = @df filter(r->r.ier>(1), DB) histogram2d(:μSIC, :ier, bins=(50, 300), color=NNcol, colorbar=false, colorbar_scale=:log10 , xlim=sic_lim, clim=NNlim, ylim=(0, 60))
 	# for Ier:
 	@df dat scatter!(:sic_bin, :μSICier, xerror=:sic_var, yerror=:σSICier, group=:coupled, label="", mc=farben, ylabel="ice r_eff", markerstrokecolor=:grey7, msw=1, lc=farben, lw=1.5, la=0.5, marker=([:^ :o], 5, 0.9), xflip=true )
-	plot!(sic_xin, x->fₛ(x, rfit[:μSICier].param), lc=:black, lw=2, la=.5, label="")
+	plot!(sic_xin, x->fₛ(x, rfit[ss][:μSICier].param), lc=:black, lw=2, la=.5, label="")
 	
-	cc = plot(a1,b1,c1,d1, layout=(2,2), tickdir=:out, minorticks=true, guidefontsize=14, tickfontsize=13, size=(800,600), dpi=600, left_margin=4Plots.mm, framestyle=:box)
+	cc = plot(a1,b1, c1, d1, layout=(2,2), tickdir=:out, minorticks=true, guidefontsize=14, tickfontsize=13, size=(800,600), dpi=600, left_margin=4Plots.mm, framestyle=:box)
 end
 
 # ╔═╡ 1f6657ba-9910-48fc-84a3-399a28d84ef5
@@ -2135,9 +2186,11 @@ version = "1.4.1+0"
 # ╟─17af9a85-0159-4c0a-b2f7-2dfb5e15bbbb
 # ╠═e274212a-ef60-4258-930e-32d6d27f1e36
 # ╠═020695a4-61ee-49f5-8e39-4256ca836183
+# ╠═6440722f-ba4f-4703-9515-e00a1dad77d4
 # ╠═ae59d379-b47d-41fc-8958-4e9e1941b528
 # ╠═d1b9d2b9-6b08-4d81-8042-26bddf8f5e54
 # ╟─9fe20fcc-8de8-4f4c-aff2-214797c40ba0
+# ╠═89809ea8-94a4-4158-8f23-b4a2322532b2
 # ╠═db52e7c0-5a8c-454a-bf1e-df9d377eff25
 # ╠═f5a31896-eeb0-4a49-9178-3995fde42a55
 # ╠═838b64cb-5719-4a82-94e0-9bd3f5e18598
@@ -2145,6 +2198,7 @@ version = "1.4.1+0"
 # ╠═018fc44f-0e6b-4eb2-8b17-4ee61015fb7c
 # ╟─16ee6021-e6ec-4b6c-aa91-1da8d8c07411
 # ╠═7cb41328-9a82-4fe4-a65c-b96e424b4e88
+# ╠═bc815051-eb29-4759-ab3f-09a237452c5c
 # ╠═154f4210-a584-4040-9c03-3c9c51c467bd
 # ╠═3af8f75f-0c94-4b4a-af8b-14d90585bd25
 # ╠═263c6114-ee34-4da6-8466-5d7bd50dfd03
@@ -2161,6 +2215,8 @@ version = "1.4.1+0"
 # ╠═1f6657ba-9910-48fc-84a3-399a28d84ef5
 # ╠═3473d761-f57f-4d3f-beba-a8a516041da5
 # ╠═07d4b3f0-d37e-4b5a-ae8f-46033e57b112
+# ╠═76c14688-0be1-43a5-932e-352ebac308b4
+# ╠═700b9f2a-1e4d-4d30-a57e-06f067d2db93
 # ╠═6b11b88f-66e4-4630-a9a0-bc479cda43e1
 # ╠═ac217227-a672-4f9c-80ff-277c57e473f9
 # ╠═54e2dd01-1682-4f5d-ac35-35dd3cc084c9
@@ -2175,6 +2231,9 @@ version = "1.4.1+0"
 # ╠═c21c2ffd-e195-4dd3-a4b1-8aaf76575d4f
 # ╠═a48a0a1a-403b-4e3c-9ce6-618a1ceb1eaa
 # ╠═f4e1159d-37ac-47b0-89ff-a9581aa3875f
+# ╠═848150e8-f3ed-4324-9964-8a6ada5df1ce
+# ╠═045d019e-9817-4bcc-8af8-6882ad43c615
+# ╠═d4460a57-4e72-4c4c-9026-50493ace7735
 # ╠═aab6bedd-c076-491f-b590-852f179e860b
 # ╠═e4c46149-6f41-49ea-99f5-f9fd4a15bb2e
 # ╠═2a4020e5-e353-4ca6-8b18-057c495209a6
