@@ -1,5 +1,5 @@
 ### A Pluto.jl notebook ###
-# v0.19.27
+# v0.19.32
 
 using Markdown
 using InteractiveUtils
@@ -32,9 +32,6 @@ begin
 	using PlutoUI
 end
 
-# ╔═╡ 04d071b7-4d62-40ce-951c-de20f1bb8911
-using GLM
-
 # ╔═╡ 123e1148-759c-11ed-29d7-e7fc1998111a
 html"""<style>
 main {
@@ -51,7 +48,7 @@ md"""
 # ╔═╡ 48c90554-bc23-4e44-a050-4bce892614a2
 # Defining data path
 begin
-	const BASE_PATH = joinpath(homedir(), "LIM/scripts/NSA-ac3-b07/CoupledCloud_Seaice")
+	const BASE_PATH = "/projekt2/ac3data/B07-data/utqiagvik-nsa/csv_nsa/" #joinpath(homedir(), "LIM/scripts/NSA-ac3-b07/CoupledCloud_Seaice")
 	const LFSIC_PATH = joinpath(BASE_PATH, "data/SIC")
 	const MIPHY_PATH = joinpath(BASE_PATH, "data/csv_mosaic")
 end;
@@ -61,34 +58,70 @@ end;
 #list_lfsic = readdir(LFSIC_PATH);
 
 # ╔═╡ d734cb56-6da3-4d2f-8bca-a804bba0ba35
-# llisting all available micro-physical files:
-#list_myphy = readdir(MIPHY_PATH);
+md"""
+##### Save Figures? $(@bind SAVEFIG confirm(CheckBox(default=false)))
+"""
 
 # ╔═╡ 17af9a85-0159-4c0a-b2f7-2dfb5e15bbbb
 md"""
-###### Select wintertime years to load: $(@bind wintertime confirm(Select(["2012-2022","2018-2019", "2017-2020"])))
+###### Select wintertime years to load: $(@bind wintertime confirm(Select(["2012-2014", "2012-2022", "2016-2017", "2017-2018", "2012-2013","2018-2019", "2019-2020", "2020-2021"])))
 """
+
+# ╔═╡ 5e79a910-f5b8-46ff-a5cb-d9204ff54cb6
+
 
 # ╔═╡ e274212a-ef60-4258-930e-32d6d27f1e36
 begin
-    DBraw = CSV.read(joinpath(BASE_PATH, "data", "all_nsa_microphys_db_$(wintertime).csv"), header=1, skipto=2, DataFrame);
-    θ₀ = 235e0;
-    θ₁ = 110e0;
+    DBraw = CSV.read(joinpath(BASE_PATH, "yearly", "all_nsa_microphys_db_$(wintertime).csv"), header=1, skipto=2, DataFrame);
+    # AOi flagging:
+    DBraw[!, :aoₓ] = let tmp=fill(0, length(DBraw[!, :aoi]))
+        tmp[DBraw[!,:aoi] .< -1] .= -1 #Pa] .≤ 101.0] .= -1 #
+        tmp[DBraw[!,:aoi] .> 1] .= +1 #Pa] .> 102.5] .= +1  #
+        tmp
+    end
+    # L-H pressure flagging:
+    DBraw[!, :paₓ] = let tmp=fill(0, length(DBraw[!, :aoi]))
+        tmp[DBraw[!,:Pa] .≤ 101.0] .= -1 #
+        tmp[DBraw[!,:Pa] .> 102.5] .= +1  #
+        tmp
+    end
 end;
 
 # ╔═╡ 020695a4-61ee-49f5-8e39-4256ca836183
-DB = let tmp = filter(𝐷->(𝐷.cth-𝐷.cbh)<(3f3) && !ismissing(𝐷.coupled), DBraw) #𝐷.μSIC>(0.0) mwvt>(0)  && 𝐷.μLF>(0.0)
-	disallowmissing!(tmp, :coupled, error=false)
-	filter!(𝐷-> 𝐷.wvtdir≥θ₀ || 𝐷.wvtdir≤θ₁, tmp)
-	tmp.ier *= 1e6
+begin
+    # Range of azimuth to filter out corresponding to Land:
+    θ₀ = 235e0;
+    θ₁ = 110e0;
+
+    DB = let tmp = filter(𝐷->(𝐷.cth - 𝐷.cbh)<(3f3) && !ismissing(𝐷.coupled), DBraw) #𝐷.μSIC>(0.0) mwvt>(0)  && 𝐷.μLF>(0.0)
+        disallowmissing!(tmp, :coupled, error=false)
+        filter!(𝐷-> 𝐷.wvtdir≥θ₀ || 𝐷.wvtdir≤θ₁, tmp)
+        tmp.ier *= 1e6
 	ii = findall((tmp.lwp .< 5) .&& (tmp.iwp .<5))
 	tmp.lwp[ii] .= 0.0
 	tmp.iwp[ii] .= 0.0
 	tmp
-end;
+    end;
+    # SIC bin flagging:
+    SIC_bin = (0:10:105)
 
-# ╔═╡ 6440722f-ba4f-4703-9515-e00a1dad77d4
-typeof(DB.coupled)
+    DB[!, :sicₓ] = let tmp=fill(NaN, length(DB[!, :μSIC]))
+        foreach(zip(SIC_bin[1:end-1], SIC_bin[2:end])) do (xb, xt)
+            ii = findall((DB.μSIC .≥ xb) .&& (DB.μSIC .< xt))
+            tmp[ii] .= mean([xb, xt])
+        end
+        tmp
+    end
+    # WINTER flagging
+    jahren = Year.(extrema(DB.date)) |> J->J[1].value:J[2].value
+    DB[!, :winter] = let tmp = fill(0, length(DB.date))
+        foreach(zip(jahren[1:end-1], jahren[2:end])) do (yb, yt)
+            ii = findall((DB.date .≥ Date(yb,11,1)) .&& (DB.date .≤ Date(yt,5,1) ) )
+            tmp[ii] .= yt
+        end
+        tmp
+    end
+end
 
 # ╔═╡ ae59d379-b47d-41fc-8958-4e9e1941b528
 filter(D-> D.wvtdir≥θ₀ || D.wvtdir≤θ₁, DBraw) |> D->length(D.date)
@@ -113,7 +146,7 @@ md"""
 # Calculating other variables:
 begin
 	# SIC threshold to split database:
-	sic₀ = 90
+	sic₀ = 95
 	# Cloud thinkness [m]:
 	DB[!, :δₕ] = (DB.cth .- DB.clb)
 	# Cloud lapse-rate [K km⁻¹]:
@@ -121,7 +154,7 @@ begin
 	# Cloud phase fraction:
 	DB[!, :χᵢ] = DB.iwp./(DB.lwp .+ DB.iwp)
 	DB[!, :lf₀] = (DB[!, sicvar] .< sic₀)
-	
+
 end;
 
 # ╔═╡ 838b64cb-5719-4a82-94e0-9bd3f5e18598
@@ -151,14 +184,13 @@ md"""
 ###### Select only SIC<90 ? $(@bind lf002 confirm(CheckBox(true)))
 """
 
-# ╔═╡ bc815051-eb29-4759-ab3f-09a237452c5c
-##md"""
-###### Select winter time to analyze: $(@bind TG Select([
-##(Date(2012,11,1),Date(2013,4,30))=>"2012-2013",(Date(2013,11,1),Date(2014,4,30))=>"2013-2014",(Date(2014,11,1),Date(2015,4,30))=>"2014-2015",(Date(2014,11,1),Date(2015,4,30))=>"2014-2015",(Date(2015,11,1),Date(2016,4,30))=>"2015-2016",(Date(2016,11,1),Date(2017,4,30))=>"2016-2017",(Date(2017,11,1),Date(2018,4,30))=>"2017-2018",(Date(2018,11,1),Date(2019,4,30))=>"2018-2019",(Date(2019,11,1),Date(2020,4,30))=>"2019-2020",(Date(2020,11,1),Date(2021,4,30))=>"2020-2021",(Date(2021,11,1),Date(2022,4,30))=>"2021-2022"]))
-##"""
-
 # ╔═╡ 3af8f75f-0c94-4b4a-af8b-14d90585bd25
 χice(T, β) = @. 0.5(1+tanh(-β[1]*(T-β[2]))) #1-1/(1+exp(.3(-T-25))) #
+
+# ╔═╡ bbc95bb1-a296-4409-93be-ecf3c83c1153
+md"""
+#### Select presure regime: $(@bind aoflag confirm(Select([+1=>"H", -1=>"L"], default=+1)))
+"""
 
 # ╔═╡ 3b1bd823-83bb-4630-be82-26b08c90f45a
 begin
@@ -170,56 +202,66 @@ begin
 	# Iso-line at -15 C max supersaturation:
 	vline!([-15], ls=:dash, lc=:skyblue, lw=3, label="T = -15 °C")
 	# binned data for decoupled and coupled:
-	@df CPF plot!(:T, :μχᵢ, ribbon=:σχᵢ, lw=0.5, group=:coupled, m=[:^ :o], ms=[5 5], markerstrokewidth=.5, color=farben, fillalpha=.3, xflip=false, xlim=(-51, 1), framestyle=:box, label=["decoupled ± σ" "coupled ± σ"], legend=:bottomleft, xlab="Cloud Top Temperature / °C", ylab="Ice fraction "*L"\chi_{ice}", guidefontsize=16,legendfontsize=12, tickfontsize=13, minorticks=true, tickdir=:out)
+	@df CPF plot!(:T, :μχᵢ, ribbon=:σχᵢ, lw=0.5, group=:coupled, m=[:^ :o], ms=[5 5], markerstrokewidth=.5, color=farben, fillalpha=.3, xflip=false, xlim=(-51, 1), framestyle=:box, label=["decoupled ± σ" "coupled ± σ"], legend=:bottomleft, xlab="Cloud Top Temperature / °C", ylab="Ice fraction "*L"\chi_{ice}"*" @ AOI $aoflag", guidefontsize=16,legendfontsize=12, tickfontsize=13, minorticks=true, tickdir=:out)
 	# top histogram: Note, when LF->all ylim=(0, 21.2f3) and legend=:toprigth, when LF>0.02 ylim=(0, 2.2f3) and no legend
 	hist_ytick = (lf002 ? (0:1f4:4.5f4) : (0:5f4:25.1f4))
 	hcpf = @df CPF plot(:T, [:Nw :Ni], group=:coupled, l=[:bar :steppre :bar :steppre], ls=:solid, lw=3, lc=[false farben[1] false farben[2]], bar_width=[0.9 0.4 0.4], fillcolor=[farben farben[2]], fillalpha=[0.9 0.7 0.7], xlim=(-51, 1), yscale=:identity, yticks=hist_ytick, yaxis=(formatter=y->@sprintf("%1.1f",1f-3y)), yguidefontsize=12, ytickfontsize=12, ylim=extrema(:Ni).*(1,1.05), xflip=false, xtickfontcolor=:gray, bottom_margins=-8Plots.mm, ylab="# x 10⁴", tickdir=:out, minorticks=true, ann=(-4, hist_ytick[end-1], text(lf002 ? "(b)" : "(a)", 20)), legend=:topleft, background_color_legend=nothing, foreground_color_legend=nothing, label=["2x  liquid (de)" "2x  Ice (de)" "liquid (co)" "Ice (co)"], top_margins=3Plots.mm) #[false :royalblue2 false :orange] [:royalblue2 :orange :orange], ylim=(0, 1.5f4)
-	plot(hcpf, lfsplt, layout=@layout([a{0.2h}; b]), size=(700, 550), left_margins=3Plots.mm)
+	chifig = plot(hcpf, lfsplt, layout=@layout([a{0.2h}; b]), size=(700, 550), left_margins=3Plots.mm)
+
+	SAVEFIG ? savefig(chifig, "/home/psgarfias/quicklooks/nsa_yearly/$(wintertime)_AOI$(aoflag)_Xice.png") : chifig
 end
 
 # ╔═╡ e1f28ccb-e252-4b44-95a3-4ffce7d45455
 begin
-	@df filter(c->!isnan(c.clb), DB) density(:clb, group=(:lf₀, :coupled), trim=true, color=farben, label=hinweistext, linealpha=[.7 .7 1 1], l=[:dash :dash :solid :solid], lw=[2 2 4 4], xlabel="Cloud liquid base height / m", xlim=(1f2, 6f3), xscale=:log10, xticks=([10,10^2,10^3,10^4], ["10¹","10²","10³","10⁴"]), ylabel="PDF", ylim=(0, .003), frame_style=:box, tickdir=:out, minorticks=true, tickfontsize=13, guidefontsize=15, legend=:topright, legendfontsize=15, size=(500,500), right_margin=2Plots.mm , fillalpha=0.4)
-	#@df filter(c->!isnan(c.clb) && c.lf₀==(true), DB) density!(:clb, group=:coupled, trim=true, lw=3, lc=[:skyblue :orange], label=["LF>0.02" "LF>0.02"], normalize=:hist)
-	#["de ∀ LF" "co ∀ LF" "de ⟹ LF>0.02" "co ⟹ LF>0.02"]
+	cbhfig = @df filter(c->!isnan(c.clb) && c.aoₓ==aoflag, DB) density(:clb, group=(:lf₀, :coupled), trim=true, color=farben, label=hinweistext, linealpha=[.7 .7 1 1], l=[:dash :dash :solid :solid], lw=[2 2 4 4], xlabel="Cloud liquid base height / m", xlim=(1f2, 6f3), xscale=:log10, xticks=([10,10^2,10^3,10^4], ["10¹","10²","10³","10⁴"]), ylabel="PDF @ AOI $aoflag", ylim=(0, .005), frame_style=:box, tickdir=:out, minorticks=true, tickfontsize=13, guidefontsize=15, legend=:topright, legendfontsize=15, size=(500,500), right_margin=2Plots.mm , fillalpha=0.4)
+	
+	SAVEFIG ? savefig(cbhfig, "/home/psgarfias/quicklooks/nsa_yearly/$(wintertime)_AOI$(aoflag)_CBH.png") : cbhfig
 end
 
 # ╔═╡ 5c9a28aa-5145-4a70-bc0e-5c299d3ae829
 begin
-	@df filter(:δₕ=> >(0), DB) density(:δₕ, group=(:lf₀, :coupled), trim=true, color=farben, label=hinweistext, linealpha=[.7 .7 1 1], l=[:dash :dash :solid :solid], lw=[2 2 4 4], xlabel="Cloud depth / m", xlim=(30, 1.1f4), xscale=:log10, xticks=([10^2,10^3,10^4], ["10²","10³","10⁴"]), ylabel="PDF", ylim=(0, .0025), frame_style=:box, tickdir=:out, minorticks=true, tickfontsize=13, guidefontsize=15, legend=:topright, legendfontsize=15, size=(500,500), right_margin=2Plots.mm , fillalpha=0.4)
+	cdpfig = @df filter(c->c.δₕ>(0) && c.aoₓ==aoflag, DB) density(:δₕ, group=(:lf₀, :coupled), trim=true, color=farben, label=hinweistext, linealpha=[.7 .7 1 1], l=[:dash :dash :solid :solid], lw=[2 2 4 4], xlabel="Cloud depth / m", xlim=(30, 1.1f4), xscale=:log10, xticks=([10^2,10^3,10^4], ["10²","10³","10⁴"]), ylabel="PDF @ AOI $aoflag", ylim=(0, .006), frame_style=:box, tickdir=:out, minorticks=true, tickfontsize=13, guidefontsize=15, legend=:topright, legendfontsize=15, size=(500,500), right_margin=2Plots.mm , fillalpha=0.4)
+	SAVEFIG ? savefig(cdpfig, "/home/psgarfias/quicklooks/nsa_yearly/$(wintertime)_AOI$(aoflag)_CDP.png") : cdpfig
 end
 
-# ╔═╡ 1b056645-fbea-4a2c-963b-6a6ad9b1d184
-#filter(:δₕ=> <(0), DB)
-
 # ╔═╡ 6992ff1a-2c1c-44b0-854d-b260a26909c8
-ctt_plt = @df DB density((:cldTT).-273.15, group=(:lf₀, :coupled), label=hinweistext, lc=farben, linealpha=[.7 .7 1 1], l=[:dash :dash :solid :solid], xlim=(-65, 3), xlabel="Cloud top temperature / °C", ylabel="PDF", trim=false, lw=[2 2 4 4], frame_style=:box, tickdir=:out,  minorticks=true, tickfontsize=13, guidefontsize=15, legendfontsize=12, size=(500,500), legend=:topleft)
-
-# ╔═╡ 10bcc318-5eee-4ec8-9335-88f6fa73b1f1
-names(DB)
+begin
+	ctt_plt = @df filter(c->c.aoₓ==aoflag, DB) density((:cldTT).-273.15, group=(:lf₀, :coupled), label=hinweistext, lc=farben, linealpha=[.7 .7 1 1], l=[:dash :dash :solid :solid], xlim=(-65, 3), xlabel="Cloud top temperature / °C", ylabel="PDF @ AOI $aoflag", trim=false, lw=[2 2 4 4], frame_style=:box, tickdir=:out,  minorticks=true, tickfontsize=13, guidefontsize=15, legendfontsize=12, size=(500,500), legend=:topleft)
+	SAVEFIG ? savefig(ctt_plt, "/home/psgarfias/quicklooks/nsa_yearly/$(wintertime)_AOI$(aoflag)_CTT.png") : ctt_plt
+end
 
 # ╔═╡ d2accbb3-87d7-484c-82f1-ab6b488b653c
 begin
-	@df filter(c->!isnan(c.lpr), DB) density(:lpr, group=(:lf₀, :coupled), label=hinweistext, lc=farben, linealpha=[.7 .7 1 1], l=[:dash :dash :solid :solid], lw=[2 2 4 4], xlim=(-30, 15), xlabel=L"\Gamma_\textrm{cloud}=-\frac{dT}{dh}\,~/~\,\textrm{°C~km^{-1}}", ylabel="PDF", ylim=(-0.002, 0.15), trim=true, frame_style=:box, tickdir=:out, minorticks=true, tickfontsize=13, guidefontsize=15, legendfontsize=15, size=(500,500), legend=:topleft); vline!([6.0],ls=:dash, lw=2, la=0.8, lc=:black, label=L"~\Gamma_\textrm{m}=6~\textrm{K~km^{-1}}")
+	lprfig = @df filter(c->!isnan(c.lpr) && c.aoₓ==aoflag, DB) density(:lpr, group=(:lf₀, :coupled), label=hinweistext, lc=farben, linealpha=[.7 .7 1 1], l=[:dash :dash :solid :solid], lw=[2 2 4 4], xlim=(-30, 15), xlabel=L"\Gamma_\textrm{cloud}=-\frac{dT}{dh}\,~/~\,\textrm{°C~km^{-1}}", ylabel="PDF @ AOI $aoflag", ylim=(-0.002, 0.18), trim=true, frame_style=:box, tickdir=:out, minorticks=true, tickfontsize=13, guidefontsize=15, legendfontsize=15, size=(500,500), legend=:topleft); vline!([6.0],ls=:dash, lw=2, la=0.8, lc=:black, label=L"~\Gamma_\textrm{m}=6~\textrm{K~km^{-1}}")
 	
-	# cloud top temperature:
-	#@df DB density!((:cldTT).-273.15, group=:coupled, label="", inset=(1, bbox(0,0,1,1)), subplot=2, xlim=(-55, 15), xmirror=true, ylim=(-0.002, 0.15), ls=:dash, lw=3, frame_style=:box, tickdir=:out, minorticks=true, link=:y, background_color_subplot=:transparent, tickfontsize=13, guidefontsize=15, legendfontsize=13, size=(500,500), legend=:topleft, xlabel="Cloud Top Temperature / °C", trim=false) 
+	SAVEFIG ? savefig(lprfig, "/home/psgarfias/quicklooks/nsa_yearly/$(wintertime)_AOI$(aoflag)_LPR.png") : lprfig
 end
 
 # ╔═╡ f99cdbfe-2d31-483f-b1a2-664ddffd95f3
 begin
-	@df filter(c->!isnan(c.Tskin), DB) density(:Tskin, group=(:lf₀, :coupled), label=hinweistext, lc=farben, linealpha=[.7 .7 1 1], l=[:dash :dash :solid :solid], lw=[2 2 4 4], xlim=(-50, 1.5), xlabel="Surface skin Temperature / °C", ylabel="PDF", ylim=(-0.002, 0.1), trim=false, frame_style=:box, tickdir=:out, minorticks=true, tickfontsize=13, guidefontsize=15, legendfontsize=15, size=(500,500), legend=:topleft) # vline!([6.0],ls=:dash, lw=2, la=0.8, lc=:black, label=L"~\Gamma_\textrm{m}=6~\textrm{K~km^{-1}}")
-
+	sktfig = @df filter(c->!isnan(c.Tskin) && c.aoₓ==aoflag, DB) density(:Tskin, group=(:lf₀, :coupled), label=hinweistext, lc=farben, linealpha=[.7 .7 1 1], l=[:dash :dash :solid :solid], lw=[2 2 4 4], xlim=(-50, 1.5), xlabel="Surface skin Temperature / °C", ylabel="PDF @ AOI $aoflag", ylim=(-0.002, 0.15), trim=false, frame_style=:box, tickdir=:out, minorticks=true, tickfontsize=13, guidefontsize=15, legendfontsize=15, size=(500,500), legend=:topleft) # vline!
+	
+	SAVEFIG ? savefig(sktfig, "/home/psgarfias/quicklooks/nsa_yearly/$(wintertime)_AOI$(aoflag)_SKT.png") : sktfig
 end
 
 # ╔═╡ 3473d761-f57f-4d3f-beba-a8a516041da5
-reff_plt = @df filter(c->1<c.der<150, DB) density(:der, group=(:lf₀, :coupled), label=hinweistext, lc=farben, linealpha=[.7 .7 1 1], l=[:dash :dash :solid :solid], xlim=(0, 60), xlabel=L"\mathrm{Liquid}~~\overline{r}_{eff}~ /~~\mathrm{\mu~m}", ylabel="PDF", trim=false, lw=[2 2 4 4], frame_style=:box, tickdir=:out,  minorticks=true, tickfontsize=13, guidefontsize=15, legendfontsize=12, size=(500,500), legend=:topright)
+begin
+	reff_plt = @df filter(c->1<c.der<150 && c.aoₓ==aoflag, DB) density(:der, group=(:lf₀, :coupled), label=hinweistext, lc=farben, linealpha=[.7 .7 1 1], l=[:dash :dash :solid :solid], xlim=(0, 60), xlabel=L"\mathrm{Liquid}~~\overline{r}_{eff}~ /~~\mathrm{\mu~m}", ylabel="PDF @ AOI $aoflag", trim=false, lw=[2 2 4 4], frame_style=:box, tickdir=:out,  minorticks=true, tickfontsize=13, guidefontsize=15, legendfontsize=12, size=(500,500), legend=:topright)
+	savefig(reff_plt, "/home/psgarfias/quicklooks/nsa_yearly/$(wintertime)_AOI$(aoflag)_DEF.png")
+end
 
 # ╔═╡ 07d4b3f0-d37e-4b5a-ae8f-46033e57b112
-ieff_plt = @df filter(c->1<c.ier<150, DB) density(:ier, group=(:lf₀, :coupled), label=hinweistext, lc=farben, linealpha=[.7 .7 1 1], l=[:dash :dash :solid :solid], xlim=(0, 70), xlabel=L"\mathrm{Ice}~~\overline{r}_{eff}~ /~~\mathrm{\mu~m}", ylabel="PDF", trim=false, lw=[2 2 4 4], frame_style=:box, tickdir=:out,  minorticks=true, tickfontsize=13, guidefontsize=15, legendfontsize=12, size=(500,500), legend=:topleft)
+begin
+	ieff_plt = @df filter(c->1<c.ier<150 && c.aoₓ==aoflag, DB) density(:ier, group=(:lf₀, :coupled), label=hinweistext, lc=farben, linealpha=[.7 .7 1 1], l=[:dash :dash :solid :solid], xlim=(0, 70), xlabel=L"\mathrm{Ice}~~\overline{r}_{eff}~ /~~\mathrm{\mu~m}", ylabel="PDF @ AOI $aoflag", trim=false, lw=[2 2 4 4], frame_style=:box, tickdir=:out,  minorticks=true, tickfontsize=13, guidefontsize=15, legendfontsize=12, size=(500,500), legend=:topleft)
+	savefig(ieff_plt, "/home/psgarfias/quicklooks/nsa_yearly/$(wintertime)_AOI$(aoflag)_IEF.png")
+end
 
 # ╔═╡ 76c14688-0be1-43a5-932e-352ebac308b4
-extrema(filter(!isnan, DB.ier))
+begin
+	aoifig = @df DB density(:aoi, group=(:lf₀, :coupled), label=hinweistext, lc=farben, linealpha=[.7 .7 1 1], l=[:dash :dash :solid :solid], xlim=(-7, 7), xlabel="AO index", ylabel="PDF", trim=true, lw=[2 2 4 4], frame_style=:box, tickdir=:out,  minorticks=true, tickfontsize=13, guidefontsize=15, legendfontsize=12, size=(500,500), legend=:topright)
+
+	savefig(aoifig, "/home/psgarfias/quicklooks/nsa_yearly/$(wintertime)_AOI.png")
+end
 
 # ╔═╡ 700b9f2a-1e4d-4d30-a57e-06f067d2db93
 typeof(DB.ier)
@@ -278,7 +320,7 @@ begin
 		
 		## DD=filter(R->T0≤R.cldTT<T1 && R.coupled==(true) && (R.lf₀ || ~lf002) && TG[1]≤R.date≤TG[2], DB)
 		
-		DD0 = filter(R->T0≤R.cldTT<T1 && (R.lf₀ || ~lf002), DB)  ##  && TG[1]≤R.date≤TG[2]
+		DD0 = filter(R->T0≤R.cldTT<T1 && (R.lf₀ || ~lf002) && R.aoₓ==aoflag, DB)  ##  && TG[1]≤R.date≤TG[2]
 		
 		# For coupled:
 		DD = filter(R->R.coupled, DD0) 
@@ -312,9 +354,6 @@ end
 
 # ╔═╡ 4da11521-ba51-406a-ae1e-02d9355fbc29
 χfit.param
-
-# ╔═╡ bbc95bb1-a296-4409-93be-ecf3c83c1153
-(0:5f2:2.2f3), extrema(CPF.Nw)
 
 # ╔═╡ 54e2dd01-1682-4f5d-ac35-35dd3cc084c9
 Nlu(DB[!,:iwp]), filter(>(0), DB.iwp) |> x->(mean(x), std(x))
@@ -379,12 +418,12 @@ begin
 				sic_edgs = (sic_bin[i] - δsic, sic_bin[i] + δsic)   # -/+ 0.75
 				# filling with IWP (decoupled):
 				tmp[:de][i,Symbol(:μSIC,y)], tmp[:de][i,Symbol(:σSIC,y)], tmp[:de][i, :sic_var], tmp[:de][i, :NNsic] = let
-					F = filter(V->within.(V[sicvar], lims=sic_edgs) .&& within.(V[y], lims=var_lim[y]) .&& (V.coupled==(false)), DB)
+					F = filter(V->within.(V[sicvar], lims=sic_edgs) .&& within.(V[y], lims=var_lim[y]) .&& (V.coupled==(false)) && V.aoₓ==aoflag, DB)
 					isempty(F) ? (NaN32, NaN32, NaN32,0) : (Nlu(eval(:($F.$y)))..., fσₑᵣ(F.σSIC), Zahlen(F.μSIC) )
 				end
 				# filling with IWP (coupled):
 				tmp[:co][i,Symbol(:μSIC,y)], tmp[:co][i,Symbol(:σSIC,y)], tmp[:co][i, :sic_var], tmp[:co][i, :NNsic] = let
-					F = filter(V->within.(V[sicvar], lims=sic_edgs) .&& within.(V[y], lims=var_lim[y]) .&& (V.coupled==(true)), DB)
+					F = filter(V->within.(V[sicvar], lims=sic_edgs) .&& within.(V[y], lims=var_lim[y]) .&& (V.coupled==(true)) && V.aoₓ==aoflag, DB)
 					isempty(F) ? (NaN32, NaN32, NaN32, 0) : (Nlu(eval(:($F.$y)))..., fσₑᵣ(F.σSIC), Zahlen(F.μSIC) )
 				end
 				#
@@ -473,9 +512,6 @@ rfit[ss][:μSIClwp].param , margin_error(rfit[ss][:μSIClwp]), fₛ([20,10,0], r
 # ╔═╡ 045d019e-9817-4bcc-8af8-6882ad43c615
 Δβ[:de][:μSIClwp], rfit[:de][:μSIClwp].param
 
-# ╔═╡ d4460a57-4e72-4c4c-9026-50493ace7735
-plot(fₛ((100:-5:0),rfit[:de][:μSIClwp].param))
-
 # ╔═╡ aab6bedd-c076-491f-b590-852f179e860b
 begin
 	
@@ -525,7 +561,7 @@ begin
 	# IWP vs SIC
 	b1 = @df filter(r->r.iwp>(0), DBraw) histogram2d(:μSIC, :iwp, bins=(60,500), color=NNcol, colorbar=false, colorbar_scale=:log10, ylim=(-10, 210), xlim=sic_lim, clim=NNlim);
 	# for IWP (decoupled):
-	@df dat scatter!(:sic_bin, :μSICiwp, xerror=:sic_var, yerror=:σSICiwp, group=:coupled, label="", mc=farben, markerstrokecolor=:grey5, lc=farben, lw=1.5, la=0.5, marker=([:^ :o], 5, 0.9), xlabel="SIC [%]", ylabel="IWP / g m⁻²", legend=:topright, legendfontsize=9, xflip=true, xticks=sic_xin[1:2:end], ylim=(10, 300))
+	@df dat scatter!(:sic_bin, :μSICiwp, xerror=:sic_var, yerror=:σSICiwp, group=:coupled, label="", mc=farben, markerstrokecolor=:grey5, lc=farben, lw=1.5, la=0.5, marker=([:^ :o], 5, 0.9), xlabel="SIC [%]", ylabel="IWP / g m⁻²", legend=:topright, legendfontsize=9, xflip=true, xticks=sic_xin[1:2:end], ylim=(-5, 300))
 	sic_yin = fₛ(sic_xin, rfit[:co][:μSICiwp].param)
 	plot!(sic_xin, sic_yin , ribbon=(sic_yin.-fₛ(sic_xin, Δβ[:co][:μSICiwp][1]), fₛ(sic_xin, Δβ[:co][:μSICiwp][2]).-sic_xin), lc=:blue, lw=2, la=.7, fillalpha=0.3, label="", ann=(88, 150, text(@sprintf("r²=%3.2f", R²[:co][:μSICiwp]), color=farben[2])), top_margins=-4Plots.mm)
 
@@ -545,16 +581,18 @@ begin
 	# Der vs SIC
 	c1 = @df filter(r->r.der>(0), DB) histogram2d(:μSIC, :der, bins=(50, 300), color=NNcol, colorbar=false, colorbar_scale=:log10 , ylim=(0, 50), xlim=sic_lim, clim=NNlim);
 	# for Der:
-	@df dat scatter!(:sic_bin, :μSICder, xerror=:sic_var, yerror=:σSICder, group=:coupled, label="", mc=farben, ylabel="droplet r_eff", markerstrokecolor=:grey7, msw=1, lc=farben, lw=1.5, la=0.5, marker=([:^ :o], 5, 0.9), xflip=true )
+	@df dat scatter!(:sic_bin, :μSICder, xerror=:sic_var, yerror=:σSICder, group=:coupled, label="", mc=farben, ylabel="droplet r_eff", markerstrokecolor=:grey7, msw=1, lc=farben, lw=1.5, la=0.5, marker=([:^ :o], 5, 0.9), xflip=true, xticks=(sic_xin[1:2:end], ""))
 	plot!(sic_xin, x->fₛ(x, rfit[ss][:μSICder].param), lc=:black, lw=2, la=.5, label="")
 
 	# Ier vs SIC
 	d1 = @df filter(r->r.ier>(1), DB) histogram2d(:μSIC, :ier, bins=(50, 300), color=NNcol, colorbar=false, colorbar_scale=:log10 , xlim=sic_lim, clim=NNlim, ylim=(0, 60))
 	# for Ier:
-	@df dat scatter!(:sic_bin, :μSICier, xerror=:sic_var, yerror=:σSICier, group=:coupled, label="", mc=farben, ylabel="ice r_eff", markerstrokecolor=:grey7, msw=1, lc=farben, lw=1.5, la=0.5, marker=([:^ :o], 5, 0.9), xflip=true )
+	@df dat scatter!(:sic_bin, :μSICier, xerror=:sic_var, yerror=:σSICier, group=:coupled, label="", mc=farben, ylabel="ice r_eff", markerstrokecolor=:grey7, msw=1, lc=farben, lw=1.5, la=0.5, marker=([:^ :o], 5, 0.9), xflip=true, xticks=sic_xin[1:2:end], xlabel="SIC [%]")
 	plot!(sic_xin, x->fₛ(x, rfit[ss][:μSICier].param), lc=:black, lw=2, la=.5, label="")
 	
-	cc = plot(a1,b1, c1, d1, layout=(2,2), tickdir=:out, minorticks=true, guidefontsize=14, tickfontsize=13, size=(800,600), dpi=600, left_margin=4Plots.mm, framestyle=:box)
+	cc = plot(a1,c1, b1, d1, layout=(2,2), tickdir=:out, minorticks=true, guidefontsize=14, tickfontsize=13, size=(800,600), dpi=600, left_margin=4Plots.mm, framestyle=:box)
+	
+	SAVEFIG ? savefig(cc, "/home/psgarfias/quicklooks/nsa_yearly/$(wintertime)_AOI$(aoflag)_LWP_SIC.png") : cc
 end
 
 # ╔═╡ 1f6657ba-9910-48fc-84a3-399a28d84ef5
@@ -579,41 +617,63 @@ begin
 	#plot(histco); plot!(histde)
 end
 
-# ╔═╡ e4c46149-6f41-49ea-99f5-f9fd4a15bb2e
-@df tmp[:de] scatter(δlf.+(:lf_bin), :μLFlwp, xerror=nσ*(:lf_var), yerror=:σLFlwp, yscale=:log10, ylim=(1, 500), label="", mc=:orange1, markerstrokecolor=:tomato2, msw=2.5, lc=:tomato2, lw=2.5, la=0.4, marker=(:^, 5, 0.9), ylabel="LWP / g m⁻²")
+# ╔═╡ 0406bc8a-6054-4b40-9b87-be632dc28d32
+@df filter(d->!isnan(d.lwp), transform(DB, :date=> ByRow(x->Year(x)) => :date)) groupedboxplot(:date, :lwp, group=:coupled, bar_width=0.4, outliers=false, fillcolor=farben, label=["de" "co"], ylabel="LWP", size=(850,400))
+
+# ╔═╡ 6913d517-e07c-4962-9c6b-d090b1bb8faa
+strwinter = [@sprintf("%04d/%02d", jj, (jj+1)-2000) for jj in jahren[1:end,1]];
+
+# ╔═╡ 6d4a626d-69a3-4538-8d6e-30e22a3e51ed
+begin
+	lwpts = @df filter(d->!isnan(d.lwp), DB) groupedboxplot(:winter, :lwp, group=:coupled, bar_width=0.35, outliers=false, notch=true, fillcolor=farben, fillalpha=0.8, label=["de" "co"], xtick=(jahren[2:end], strwinter), xrot=35, xlabel="Wintertime", ylabel="LWP [g m⁻²]", size=(850,400), left_margin=3Plots.mm, bottom_margin=7Plots.mm, tickdir=:out, yminorticks=true, guidefontsize=14, ytickfontsize=13, xtickfontsize=9);
+	# Calculating mean of LWP co & de:
+	@df groupby(filter(d->!isnan(d.lwp), DB), :winter) |> d->combine(d) do df
+	(lwp_co = mean(filter(d->d.coupled==(true),df).lwp), lwp_de = mean(filter(d->d.coupled==(false),df).lwp))# 
+		end scatter!(lwpts, :winter.+[-0.1 0.1], [:lwp_de, :lwp_co], m=:o, markerstrokewidth=2, mc=farben, label="mean")
+end
+
+# ╔═╡ acb055d8-44b0-45f9-989c-0e33fa8f86d5
+@df filter(d->!isnan(d.μSIC), DB) groupedboxplot(:winter, :σSIC./(:μSIC.-101), group=:coupled, outliers=false, color=farben)
+
+# ╔═╡ 2cc166c0-464b-41a4-be91-44d936f1eedf
+@df filter(d->!isnan(d.lwp) && d.paₓ==(-1), DB) groupedboxplot(:winter, :lwp, group=:coupled, bar_width=0.4, outliers=false, fillcolor=farben, label=["de" "co"], xtick=jahren, ylabel="LWP [g m⁻²]", size=(850,400), left_margin=3Plots.mm, title="Pressure level L")
+
+# ╔═╡ 4a5f18c6-3c6a-40f5-ad18-d1c46048ed3d
+# ICE WATER PATH
+
+# ╔═╡ c1c5b1ac-fd5c-4734-aa9a-cfc18b640eea
+@df filter(d->!isnan(d.iwp) && d.aoₓ==(-1), DB) groupedboxplot(:winter, :iwp, group=:coupled, bar_width=0.4, outliers=false, fillcolor=farben, label=["de" "co"], xtick=jahren, ylabel="IWP [g m⁻²]", size=(850,400), left_margin=3Plots.mm, title="AO index -")
+
+# ╔═╡ 9a86e6d3-9e4c-4d14-b53f-81aba7e0e362
+@df filter(d->!isnan(d.iwp) && d.paₓ==(-1), DB) groupedboxplot(:winter, :iwp, group=:coupled, bar_width=0.4, outliers=false, fillcolor=farben, label=["de" "co"], xtick=jahren, ylabel="IWP [g m⁻²]", size=(850,400), left_margin=3Plots.mm, title="Pressure level L")
+
+# ╔═╡ da33cd4a-7eec-4437-b31e-eabd91f5a8ae
+# SEA ICE CONCENTRAION
+
+# ╔═╡ 4c56ee27-9a31-47e7-9959-05c342b0c4d2
+begin
+	@df filter(d->!isnan(d.RμSIC) .&& d.paₓ==(1) .&& d.coupled==true, DB) violin(:winter, :RμSIC, outliers=false, side=:right, label="co", xtick=jahren)
+	@df filter(d->!isnan(d.RμSIC) .&& d.paₓ==(1) .&& d.coupled==false, DB) violin!(:winter, :RμSIC, outliers=false, side=:left, label="de", xtick=jahren, ylabel="50km sector SIC", size=(850,400), left_margin=3Plots.mm, title="Pressure level H", legend=:bottom)
+end
 
 # ╔═╡ 2a4020e5-e353-4ca6-8b18-057c495209a6
 tt = heatmap(repeat(vec([NNlim...]),1,2), color=NNcol, clim=NNlim, colorbar_scale=:log10, #colorbar_title=" No. occurence", 
 colorbar_titlefontsize=15, tickfontsize=13, colorbar_tickswidth=4, xlim=(-4,-1), framestyle=:none, top_margins=1.5Plots.mm)
 
-# ╔═╡ 35e4009c-b4b3-485d-9692-93dd2b9b4869
-@df filter(D->D.coupled && D.mwvt>(0), DB ) scatter(:σSIC./:μSIC, :lwp, zcolor=:mwvt, marker=:plus, clim=(0, 50), ylabel="")
-
-# ╔═╡ 33339141-3d9e-474e-a77b-294772da71d4
-@df filter(D->!D.coupled && D.mwvt>(0), DB ) scatter(:cldTT .- 273.15, :μSIC, :χᵢ, zcolor=:mwvt, markersize=1, markerstrokewidth=0, xlim=(-40, 0), clim=(0, 50), ylabel="IWP", color=:tokyo)
-
 # ╔═╡ 60b8b0bb-f8de-49b5-98f3-1b6c26453344
-@df DB histogram(:wvtdir, group=:coupled, normalize=:probability, label=["deco" "co"], xlabel="wind dir at max WVT", ylabel="PDF", lw=[1 3], color=farben)
+@df filter(c->c.aoₓ==(-1), DB) histogram(:wvtdir, group=:coupled, nbins=40, normalize=:probability, label=["deco" "co"], xlabel="wind dir at max WVT", ylabel="PDF", lw=[1 3], color=farben, xminorticks=true, xtickdir=:out, fillalpha=0.5)
 
 # ╔═╡ 0a29cbe6-603c-4749-acb5-a0fb42c3eb7b
 @df dat scatter(:sic_bin, [:μSIClwp :μSICiwp], group=:coupled, marker=[:circle :star :circle :star], color=[farben[1] farben[1] farben[2] farben[2]]); plot!([0:5:100], x->fₛ(x, rfit[:μSIClwp].param), label="fit LWP"); plot!([0:5:100], x->fₛ(x, rfit[:μSICiwp].param), label="fit IWP")
 
-# ╔═╡ 676aec9a-a5e7-419d-8486-b575d8290763
-ols = lm(@formula(:μSIClwp ~ :sic_bin), dat)
-
 # ╔═╡ 5c3d36a8-7982-41e3-8bc0-e36734e6ed0d
-@df filter(D->D.mwvt>(0),DB) scatter(:mwvt, :χᵢ, markersize=1, markerstrokewidth=0, zcolor=:cldTT, clim=(233,278))
+Pahist =@df filter(D->!isnan(D.Pa), DB) groupedhist(:Pa, group=:aoₓ, bins=(98:0.25:106), bar_position=:stack, xlim=(97, 107), fillalpha=[0.3 0.5 0.9], xlabel="", ylabel="# of occurance", title="Years 2012 to 2022", label=["AOi < -1" "-1 ≤ AOi ≤ 1" "AOi > 1"])
 
-# ╔═╡ 7bf0bfc2-f8ab-4d0b-b547-485128445378
-dat.sic_bin
+# ╔═╡ b9b953ef-6ed2-4128-b234-8cf5e50be7dc
+Pabxplt=@df filter(D->!isnan(D.Pa), DBraw) groupedboxplot(:aoₓ, :Pa, group=:aoₓ, box_width=2.8, outliers=false, orientation=:h, legend=false,  ylabel="AOi", yticks=([-1,0,1], ["<-1","-1 … 1",">1"]), xlabel="Surface Pressure [kPa]", xlim=(97, 107), fillalpha=[0.3 0.5 0.9])
 
-# ╔═╡ 3b878a4b-c553-4603-a560-13afd445275f
-let tmp=DataFrame(X=Float32.(dat[1:19, :sic_bin]), Y=dat[1:19, :μSIClwp])
-	lm(@formula(Y~X+1), tmp ) #, Gamma(), InverseLink() ) #DataFrames.describe(tmp) 
-end
-
-# ╔═╡ c1d70b5a-cc10-4b54-a881-ea7323b56eb7
-##CSV.write("binned_nsa_dat.csv", dat)
+# ╔═╡ c9bbb25e-7f3a-4218-8ab0-46fb0f83637f
+plot(Pahist, Pabxplt, layout=@layout([b;a{0.35h}]))
 
 # ╔═╡ 00000000-0000-0000-0000-000000000001
 PLUTO_PROJECT_TOML_CONTENTS = """
@@ -622,7 +682,6 @@ CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
 DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
 Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
 Distributions = "31c24e10-a181-5473-b8eb-7969acd0382f"
-GLM = "38e38edf-8417-5370-95a0-9cbb8c7f171a"
 JLD2 = "033835bb-8acc-5ee8-8aae-3f567f8a3819"
 LaTeXStrings = "b964fa9f-0449-5b57-a5c2-d3ea65f4040f"
 LsqFit = "2fda8390-95c7-5789-9bda-21331edee243"
@@ -638,14 +697,10 @@ StatsPlots = "f3b207a7-027a-5e70-b257-86293d7955fd"
 CSV = "~0.10.8"
 DataFrames = "~1.6.1"
 Distributions = "~0.25.79"
-GLM = "~1.8.3"
 JLD2 = "~0.4.30"
 LaTeXStrings = "~1.3.0"
-LsqFit = "~0.13.0"
-Plots = "~1.38.3"
 PlutoUI = "~0.7.50"
 PrettyTables = "~2.2.3"
-StatsBase = "~0.33.21"
 StatsPlots = "~0.15.4"
 """
 
@@ -655,7 +710,7 @@ PLUTO_MANIFEST_TOML_CONTENTS = """
 
 julia_version = "1.9.0"
 manifest_format = "2.0"
-project_hash = "024438ffcfed583dab9f46bd4326cf9a421ce205"
+project_hash = "a23b5da082c6e7ac2898051ec31d7fd8ba0687b6"
 
 [[deps.AbstractFFTs]]
 deps = ["LinearAlgebra"]
@@ -919,18 +974,20 @@ deps = ["Random", "Serialization", "Sockets"]
 uuid = "8ba89e20-285c-5b6f-9357-94700520ee1b"
 
 [[deps.Distributions]]
-deps = ["FillArrays", "LinearAlgebra", "PDMats", "Printf", "QuadGK", "Random", "SpecialFunctions", "Statistics", "StatsAPI", "StatsBase", "StatsFuns", "Test"]
-git-tree-sha1 = "938fe2981db009f531b6332e31c58e9584a2f9bd"
+deps = ["FillArrays", "LinearAlgebra", "PDMats", "Printf", "QuadGK", "Random", "SpecialFunctions", "Statistics", "StatsAPI", "StatsBase", "StatsFuns"]
+git-tree-sha1 = "a6c00f894f24460379cb7136633cef54ac9f6f4a"
 uuid = "31c24e10-a181-5473-b8eb-7969acd0382f"
-version = "0.25.100"
+version = "0.25.103"
 
     [deps.Distributions.extensions]
     DistributionsChainRulesCoreExt = "ChainRulesCore"
     DistributionsDensityInterfaceExt = "DensityInterface"
+    DistributionsTestExt = "Test"
 
     [deps.Distributions.weakdeps]
     ChainRulesCore = "d360d2e6-b24c-11e9-a2a3-2a2ae2dbcce4"
     DensityInterface = "b429d917-457f-4dbc-8f4c-0cc954292b1d"
+    Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [[deps.DocStringExtensions]]
 deps = ["LibGit2"]
@@ -948,6 +1005,12 @@ deps = ["Calculus", "NaNMath", "SpecialFunctions"]
 git-tree-sha1 = "5837a837389fccf076445fce071c8ddaea35a566"
 uuid = "fa6b7ba4-c1ee-5f82-b5fc-ecf0adba8f74"
 version = "0.6.8"
+
+[[deps.EpollShim_jll]]
+deps = ["Artifacts", "JLLWrappers", "Libdl"]
+git-tree-sha1 = "8e9441ee83492030ace98f9789a654a6d0b1f643"
+uuid = "2702e6a9-849d-5ed8-8c21-79e8b8f9ee43"
+version = "0.0.20230411+0"
 
 [[deps.ExceptionUnwrapping]]
 deps = ["Test"]
@@ -1072,12 +1135,6 @@ git-tree-sha1 = "d972031d28c8c8d9d7b41a536ad7bb0c2579caca"
 uuid = "0656b61e-2033-5cc2-a64a-77c0f6c09b89"
 version = "3.3.8+0"
 
-[[deps.GLM]]
-deps = ["Distributions", "LinearAlgebra", "Printf", "Reexport", "SparseArrays", "SpecialFunctions", "Statistics", "StatsAPI", "StatsBase", "StatsFuns", "StatsModels"]
-git-tree-sha1 = "97829cfda0df99ddaeaafb5b370d6cab87b7013e"
-uuid = "38e38edf-8417-5370-95a0-9cbb8c7f171a"
-version = "1.8.3"
-
 [[deps.GR]]
 deps = ["Artifacts", "Base64", "DelimitedFiles", "Downloads", "GR_jll", "HTTP", "JSON", "Libdl", "LinearAlgebra", "Pkg", "Preferences", "Printf", "Random", "Serialization", "Sockets", "TOML", "Tar", "Test", "UUIDs", "p7zip_jll"]
 git-tree-sha1 = "d73afa4a2bb9de56077242d98cf763074ab9a970"
@@ -1187,10 +1244,10 @@ uuid = "82899510-4779-5014-852e-03e436cf321d"
 version = "1.0.0"
 
 [[deps.JLD2]]
-deps = ["FileIO", "MacroTools", "Mmap", "OrderedCollections", "Pkg", "Printf", "Reexport", "Requires", "TranscodingStreams", "UUIDs"]
-git-tree-sha1 = "aa6ffef1fd85657f4999030c52eaeec22a279738"
+deps = ["FileIO", "MacroTools", "Mmap", "OrderedCollections", "Pkg", "PrecompileTools", "Printf", "Reexport", "Requires", "TranscodingStreams", "UUIDs"]
+git-tree-sha1 = "9bbb5130d3b4fa52846546bca4791ecbdfb52730"
 uuid = "033835bb-8acc-5ee8-8aae-3f567f8a3819"
-version = "0.4.33"
+version = "0.4.38"
 
 [[deps.JLFzf]]
 deps = ["Pipe", "REPL", "Random", "fzf_jll"]
@@ -1247,9 +1304,9 @@ uuid = "dd4b983a-f0e5-5f8d-a1b7-129d4a5fb1ac"
 version = "2.10.1+0"
 
 [[deps.LaTeXStrings]]
-git-tree-sha1 = "f2355693d6778a178ade15952b7ac47a4ff97996"
+git-tree-sha1 = "50901ebc375ed41dbf8058da26f9de442febbbec"
 uuid = "b964fa9f-0449-5b57-a5c2-d3ea65f4040f"
-version = "1.3.0"
+version = "1.3.1"
 
 [[deps.Latexify]]
 deps = ["Formatting", "InteractiveUtils", "LaTeXStrings", "MacroTools", "Markdown", "OrderedCollections", "Printf", "Requires"]
@@ -1369,10 +1426,10 @@ uuid = "e6f89c97-d47a-5376-807f-9c37f3926c36"
 version = "1.0.0"
 
 [[deps.LsqFit]]
-deps = ["Distributions", "ForwardDiff", "LinearAlgebra", "NLSolversBase", "OptimBase", "Random", "StatsBase"]
-git-tree-sha1 = "00f475f85c50584b12268675072663dfed5594b2"
+deps = ["Distributions", "ForwardDiff", "LinearAlgebra", "NLSolversBase", "Printf", "StatsAPI"]
+git-tree-sha1 = "40acc20cfb253cf061c1a2a2ea28de85235eeee1"
 uuid = "2fda8390-95c7-5789-9bda-21331edee243"
-version = "0.13.0"
+version = "0.15.0"
 
 [[deps.MIMEs]]
 git-tree-sha1 = "65f28ad4b594aebe22157d6fac869786a255b7eb"
@@ -1497,12 +1554,6 @@ git-tree-sha1 = "13652491f6856acfd2db29360e1bbcd4565d04f1"
 uuid = "efe28fd5-8261-553b-a9e1-b2916fc3738e"
 version = "0.5.5+0"
 
-[[deps.OptimBase]]
-deps = ["NLSolversBase", "Printf", "Reexport"]
-git-tree-sha1 = "9cb1fee807b599b5f803809e85c81b582d2009d6"
-uuid = "87e2bd06-a317-5318-96d9-3ecbac512eee"
-version = "2.0.2"
-
 [[deps.Opus_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
 git-tree-sha1 = "51a08fb14ec28da2ec7a927c4337e4332c2a4720"
@@ -1561,9 +1612,9 @@ version = "1.3.5"
 
 [[deps.Plots]]
 deps = ["Base64", "Contour", "Dates", "Downloads", "FFMPEG", "FixedPointNumbers", "GR", "JLFzf", "JSON", "LaTeXStrings", "Latexify", "LinearAlgebra", "Measures", "NaNMath", "Pkg", "PlotThemes", "PlotUtils", "PrecompileTools", "Preferences", "Printf", "REPL", "Random", "RecipesBase", "RecipesPipeline", "Reexport", "RelocatableFolders", "Requires", "Scratch", "Showoff", "SparseArrays", "Statistics", "StatsBase", "UUIDs", "UnicodeFun", "UnitfulLatexify", "Unzip"]
-git-tree-sha1 = "9f8675a55b37a70aa23177ec110f6e3f4dd68466"
+git-tree-sha1 = "ccee59c6e48e6f2edf8a5b64dc817b6729f99eb5"
 uuid = "91a5bcdd-55d7-5caf-9e0b-520d859cae80"
-version = "1.38.17"
+version = "1.39.0"
 
     [deps.Plots.extensions]
     FileIOExt = "FileIO"
@@ -1581,9 +1632,9 @@ version = "1.38.17"
 
 [[deps.PlutoUI]]
 deps = ["AbstractPlutoDingetjes", "Base64", "ColorTypes", "Dates", "FixedPointNumbers", "Hyperscript", "HypertextLiteral", "IOCapture", "InteractiveUtils", "JSON", "Logging", "MIMEs", "Markdown", "Random", "Reexport", "URIs", "UUIDs"]
-git-tree-sha1 = "e47cd150dbe0443c3a3651bc5b9cbd5576ab75b7"
+git-tree-sha1 = "bd7c69c7f7173097e7b5e1be07cee2b8b7447f51"
 uuid = "7f904dfe-b85e-4ff6-b463-dae2292396a8"
-version = "0.7.52"
+version = "0.7.54"
 
 [[deps.PooledArrays]]
 deps = ["DataAPI", "Future"]
@@ -1605,9 +1656,9 @@ version = "1.4.0"
 
 [[deps.PrettyTables]]
 deps = ["Crayons", "LaTeXStrings", "Markdown", "Printf", "Reexport", "StringManipulation", "Tables"]
-git-tree-sha1 = "ee094908d720185ddbdc58dbe0c1cbe35453ec7a"
+git-tree-sha1 = "6842ce83a836fbbc0cfeca0b5a4de1a4dcbdb8d1"
 uuid = "08abe8d2-0d0c-5749-adfa-8a2ac140af0d"
-version = "2.2.7"
+version = "2.2.8"
 
 [[deps.Printf]]
 deps = ["Unicode"]
@@ -1713,11 +1764,6 @@ version = "1.1.1"
 deps = ["Distributed", "Mmap", "Random", "Serialization"]
 uuid = "1a1011a3-84de-559e-8e89-a11a2f7dc383"
 
-[[deps.ShiftedArrays]]
-git-tree-sha1 = "503688b59397b3307443af35cd953a13e8005c16"
-uuid = "1277b4bf-5013-50f5-be3d-901d8477a67a"
-version = "2.0.0"
-
 [[deps.Showoff]]
 deps = ["Dates", "Grisu"]
 git-tree-sha1 = "91eddf657aca81df9ae6ceb20b959ae5653ad1de"
@@ -1780,9 +1826,9 @@ version = "1.6.0"
 
 [[deps.StatsBase]]
 deps = ["DataAPI", "DataStructures", "LinearAlgebra", "LogExpFunctions", "Missings", "Printf", "Random", "SortingAlgorithms", "SparseArrays", "Statistics", "StatsAPI"]
-git-tree-sha1 = "d1bf48bfcc554a3761a133fe3a9bb01488e06916"
+git-tree-sha1 = "1d77abd07f617c4868c33d4f5b9e1dbb2643c9cf"
 uuid = "2913bbd2-ae8a-5f71-8c99-4fb6c76f3a91"
-version = "0.33.21"
+version = "0.34.2"
 
 [[deps.StatsFuns]]
 deps = ["HypergeometricFunctions", "IrrationalConstants", "LogExpFunctions", "Reexport", "Rmath", "SpecialFunctions"]
@@ -1797,12 +1843,6 @@ version = "1.3.0"
     [deps.StatsFuns.weakdeps]
     ChainRulesCore = "d360d2e6-b24c-11e9-a2a3-2a2ae2dbcce4"
     InverseFunctions = "3587e190-3f89-42d0-90ee-14403ec27112"
-
-[[deps.StatsModels]]
-deps = ["DataAPI", "DataStructures", "LinearAlgebra", "Printf", "REPL", "ShiftedArrays", "SparseArrays", "StatsBase", "StatsFuns", "Tables"]
-git-tree-sha1 = "8cc7a5385ecaa420f0b3426f9b0135d0df0638ed"
-uuid = "3eaba693-59b7-5ba5-a881-562e759f1c8d"
-version = "0.7.2"
 
 [[deps.StatsPlots]]
 deps = ["AbstractFFTs", "Clustering", "DataStructures", "Distributions", "Interpolations", "KernelDensity", "LinearAlgebra", "MultivariateStats", "NaNMath", "Observables", "Plots", "RecipesBase", "RecipesPipeline", "Reexport", "StatsBase", "TableOperations", "Tables", "Widgets"]
@@ -1917,7 +1957,7 @@ uuid = "41fe7b60-77ed-43a1-b4f0-825fd5a5650d"
 version = "0.2.0"
 
 [[deps.Wayland_jll]]
-deps = ["Artifacts", "Expat_jll", "JLLWrappers", "Libdl", "Libffi_jll", "Pkg", "XML2_jll"]
+deps = ["Artifacts", "EpollShim_jll", "Expat_jll", "JLLWrappers", "Libdl", "Libffi_jll", "Pkg", "XML2_jll"]
 git-tree-sha1 = "ed8d92d9774b077c53e1da50fd81a36af3744c1c"
 uuid = "a2964d1f-97da-50d4-b82a-358c7fce9d89"
 version = "1.21.0+0"
@@ -2182,23 +2222,22 @@ version = "1.4.1+0"
 # ╠═0cdaa10d-e72a-4b41-8e41-860317ced277
 # ╠═48c90554-bc23-4e44-a050-4bce892614a2
 # ╠═f40e149b-5bbc-45ed-9262-0b74c52cb19f
-# ╠═d734cb56-6da3-4d2f-8bca-a804bba0ba35
+# ╟─d734cb56-6da3-4d2f-8bca-a804bba0ba35
 # ╟─17af9a85-0159-4c0a-b2f7-2dfb5e15bbbb
+# ╠═5e79a910-f5b8-46ff-a5cb-d9204ff54cb6
 # ╠═e274212a-ef60-4258-930e-32d6d27f1e36
 # ╠═020695a4-61ee-49f5-8e39-4256ca836183
-# ╠═6440722f-ba4f-4703-9515-e00a1dad77d4
 # ╠═ae59d379-b47d-41fc-8958-4e9e1941b528
 # ╠═d1b9d2b9-6b08-4d81-8042-26bddf8f5e54
 # ╟─9fe20fcc-8de8-4f4c-aff2-214797c40ba0
-# ╠═89809ea8-94a4-4158-8f23-b4a2322532b2
+# ╟─89809ea8-94a4-4158-8f23-b4a2322532b2
 # ╠═db52e7c0-5a8c-454a-bf1e-df9d377eff25
 # ╠═f5a31896-eeb0-4a49-9178-3995fde42a55
-# ╠═838b64cb-5719-4a82-94e0-9bd3f5e18598
+# ╟─838b64cb-5719-4a82-94e0-9bd3f5e18598
 # ╠═e530627f-4fa8-4006-b119-55f9efe72d21
 # ╠═018fc44f-0e6b-4eb2-8b17-4ee61015fb7c
 # ╟─16ee6021-e6ec-4b6c-aa91-1da8d8c07411
-# ╠═7cb41328-9a82-4fe4-a65c-b96e424b4e88
-# ╠═bc815051-eb29-4759-ab3f-09a237452c5c
+# ╟─7cb41328-9a82-4fe4-a65c-b96e424b4e88
 # ╠═154f4210-a584-4040-9c03-3c9c51c467bd
 # ╠═3af8f75f-0c94-4b4a-af8b-14d90585bd25
 # ╠═263c6114-ee34-4da6-8466-5d7bd50dfd03
@@ -2207,9 +2246,7 @@ version = "1.4.1+0"
 # ╠═bbc95bb1-a296-4409-93be-ecf3c83c1153
 # ╠═e1f28ccb-e252-4b44-95a3-4ffce7d45455
 # ╠═5c9a28aa-5145-4a70-bc0e-5c299d3ae829
-# ╠═1b056645-fbea-4a2c-963b-6a6ad9b1d184
 # ╠═6992ff1a-2c1c-44b0-854d-b260a26909c8
-# ╠═10bcc318-5eee-4ec8-9335-88f6fa73b1f1
 # ╠═d2accbb3-87d7-484c-82f1-ab6b488b653c
 # ╠═f99cdbfe-2d31-483f-b1a2-664ddffd95f3
 # ╠═1f6657ba-9910-48fc-84a3-399a28d84ef5
@@ -2233,19 +2270,22 @@ version = "1.4.1+0"
 # ╠═f4e1159d-37ac-47b0-89ff-a9581aa3875f
 # ╠═848150e8-f3ed-4324-9964-8a6ada5df1ce
 # ╠═045d019e-9817-4bcc-8af8-6882ad43c615
-# ╠═d4460a57-4e72-4c4c-9026-50493ace7735
 # ╠═aab6bedd-c076-491f-b590-852f179e860b
-# ╠═e4c46149-6f41-49ea-99f5-f9fd4a15bb2e
+# ╠═0406bc8a-6054-4b40-9b87-be632dc28d32
+# ╠═6913d517-e07c-4962-9c6b-d090b1bb8faa
+# ╠═6d4a626d-69a3-4538-8d6e-30e22a3e51ed
+# ╠═acb055d8-44b0-45f9-989c-0e33fa8f86d5
+# ╠═2cc166c0-464b-41a4-be91-44d936f1eedf
+# ╠═4a5f18c6-3c6a-40f5-ad18-d1c46048ed3d
+# ╠═c1c5b1ac-fd5c-4734-aa9a-cfc18b640eea
+# ╠═9a86e6d3-9e4c-4d14-b53f-81aba7e0e362
+# ╠═da33cd4a-7eec-4437-b31e-eabd91f5a8ae
+# ╠═4c56ee27-9a31-47e7-9959-05c342b0c4d2
 # ╠═2a4020e5-e353-4ca6-8b18-057c495209a6
-# ╠═35e4009c-b4b3-485d-9692-93dd2b9b4869
-# ╠═33339141-3d9e-474e-a77b-294772da71d4
 # ╠═60b8b0bb-f8de-49b5-98f3-1b6c26453344
 # ╠═0a29cbe6-603c-4749-acb5-a0fb42c3eb7b
-# ╠═04d071b7-4d62-40ce-951c-de20f1bb8911
-# ╠═676aec9a-a5e7-419d-8486-b575d8290763
 # ╠═5c3d36a8-7982-41e3-8bc0-e36734e6ed0d
-# ╠═7bf0bfc2-f8ab-4d0b-b547-485128445378
-# ╠═3b878a4b-c553-4603-a560-13afd445275f
-# ╠═c1d70b5a-cc10-4b54-a881-ea7323b56eb7
+# ╠═b9b953ef-6ed2-4128-b234-8cf5e50be7dc
+# ╠═c9bbb25e-7f3a-4218-8ab0-46fb0f83637f
 # ╟─00000000-0000-0000-0000-000000000001
 # ╟─00000000-0000-0000-0000-000000000002

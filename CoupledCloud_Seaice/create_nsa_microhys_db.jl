@@ -15,19 +15,20 @@ using ARMtools
 
 # Defining data path
 const BASE_PATH = joinpath(homedir(), "LIM/scripts/NSA-ac3-b07")
-const DATA_PATH = joinpath(BASE_PATH, "CoupledCloud_Seaice/data")
+const DATA_PATH = "/projekt2/ac3data/B07-data/utqiagvik-nsa/" #joinpath(BASE_PATH, "CoupledCloud_Seaice/data")
 const LFSIC_PATH = joinpath(BASE_PATH, "SeaIce/data")
 const MIPHY_PATH = joinpath(DATA_PATH, "csv_nsa")
 
 # defining the wintertime to process e.g. for year yy:Nov, Dec to yy+1:Jan, Feb, Mar, Apr.
 years = (2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021)
 
-DB = DataFrame()
 
 for jahr ∈ years
     zu_jahr = jahr + 1
     datum = Date(jahr, 11):Day(1):Date(zu_jahr, 4, 30)
     
+    DB = DataFrame()
+
     for heute ∈ datum
         
         yy = year(heute)
@@ -60,5 +61,5 @@ for jahr ∈ years
         append!(DB, cldphys, promote=true)
     end
 
-    CSV.write(joinpath(DATA_PATH, "all_nsa_microphys_db_$(jahr)-$(zu_jahr).csv"), DB)
+    CSV.write(joinpath(MIPHY_PATH, "yearly", "all_nsa_microphys_db_$(jahr)-$(zu_jahr).csv"), DB)
 end

@@ -5,8 +5,8 @@
 
 using CSV, DataFrames
 
-PATH_DATA = "./data";
-jahre = (2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021)
+PATH_DATA = "/projekt2/ac3data/B07-data/utqiagvik-nsa/csv_nsa/yearly";
+jahre = (2012, 2013) #, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021)
 
 ff = let dfiles=[]
     tmp=readdir(PATH_DATA, join=true)

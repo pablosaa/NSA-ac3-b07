@@ -1,3 +1,24 @@
+# Auxiliary functions
+"""
+Function to vertically integrate the profiles.
+USAGE:
+```julia-repl
+julia> I₀ₜ = ∫fdh(LWP, H)
+julia> I₀ₜ = ∫fdh(LWP, H; h₀=H_bot, hₜ=H_top)
+```
+WHERE:
+* LWP::Matrix 2D variable to integrate along the 2nd dimension (e.g. profile),
+* H::Vector  with heights to integrate LWP along the 2nd dimension,
+* h₀::Vector the bottom altitude of H to use for integration (optional),
+* hₜ::Vector the top altitude of H to use for integration (optional)
+
+RETURN:
+* I₀ₜ::Vector with the variable LWP integrated relative to heights H.
+
+(c) 2022 Pablo Saavedra Garfias
+_Faculty of Physics and Geosciences_
+_Leipzig University_
+"""
 function ∫fdh(x::AbstractArray, H::AbstractVector; h₀=Real[], hₜ=Real[])
     # getting dimensions:
     nheight, ntime = size(x)
@@ -38,5 +59,42 @@ function ∫fdh(x::AbstractArray, H::AbstractVector; h₀=Real[], hₜ=Real[])
     end
     return 𝐼₀ₜ
 end
+#----/
+
+# Function to obtain the daily Arctic Oscilation Index and interpolate to any time series:
+"""
+Function to obtain the daily Arctic Oscilation Index and interpolate to any time series
+
+USAGE:
+```julia-repl
+julia> using CSV, HTTP, DataFrames
+julia> fn = CSV.File(HTTP.get(url).body, header=1);
+julia> aoi = aoindex_from_timeseries(fn, ts);
+```
+WHERE:
+* fn::CSV.File the object from the AOI datafile specified by url::String,
+* ts::Vector{DateTime} with the time series to interpolate,
+
+RETURN:
+* aoi::DataFrame with the files :date=>ts and :aoi the interpolated AO index.
+
+(c) 2023 Pablo Saavedra Garfias
+_Faculty of Physics and Geosciences_
+_Leipzig University_
+"""
+function aoindex_from_timeseries(fn, ts::Vector{DateTime})
+
+    aoi_date = DateTime.(fn.year, fn.month, fn.day) .|> Dates.value
+    aoi_index= fn.ao_index_cdas
+    # preparing variables to interpotale:
+    itp = interpolate((aoi_date,), aoi_index, Gridded(Linear()));
+    # now interpolating to MOSAiC time series:
+    return DataFrame(:date=>ts, :aoi=>itp(Dates.value.(ts)))
+end
+
+
+
+
+
 #----/
 

@@ -7,7 +7,7 @@
 # general packages:
 using Dates
 using JLD2
-using CSV, DataFrames
+using CSV, DataFrames, HTTP
 using ImageFiltering
 using Statistics
 using Interpolations
@@ -25,11 +25,25 @@ const LPR_PATH = joinpath(DATA_PATH, "LP")
 const CLNET_PATH = joinpath(DATA_PATH, CAMPAIGN, "CloudNet","1.8.0", "output")
 const CLNET_PRODUCT = "CEIL10m" # "TROPOS/processed/categorize"
 const RS_PATH = joinpath("/projekt2/remsens/data_new/site-campaign", CAMPAIGN)
-const OUT_CSV = joinpath("data", "csv_nsa")
+const OUT_CSV = joinpath(DATA_PATH, CAMPAIGN, "csv_nsa")
 
 include("tmp_auxfiles.jl");
 
-winter_jahr = 2020;
+# Optional flags:
+const ADDAOI = true;
+const ADDT2m = false;
+const ADDPsu = false;
+
+# Reading AO index if flag set to TRUE:
+if ADDAOI
+    aoi_fn = let infile = "https://ftp.cpc.ncep.noaa.gov/cwlinks/norm.daily.ao.cdas.z1000.19500101_current.csv";
+        http_response = HTTP.get(infile);
+        CSV.File(http_response.body, header=1);
+    end
+end
+
+
+winter_jahr = 2012:2021;
 #( (winter_jahr,11), (winter_jahr,12), (,1), (2019,2), (2019,3), (2019,4))
 days = (1:31) #21  #18 #28 #6
 
@@ -38,7 +52,7 @@ days = (1:31) #21  #18 #28 #6
 	eval(ex)
 end
 
-datum = [Date(winter_jahr, 11)+Month(m) for m ∈ 0:5]
+datum = [Date(yy, 11)+Month(m) for yy ∈ winter_jahr for m ∈ 0:5]
 
 for heute in datum
     yy, mm = year(heute), month(heute)
@@ -69,9 +83,24 @@ for heute in datum
         end;
 
 
+        # *** Reading Radiosonde data from ARM NSA ***
+        rs_filen = ARMtools.getFilePattern(RS_PATH, "INTERPOLATEDSONDE", yy, mm, dd)
+        !isnothing(rs_filen) ? rs = ARMtools.getSondeData(rs_filen) : (@warn "No Radiosonde $(heute)"; continue)
+
         # Reading ARM microwave radiometer file:
         mwr = let nfile=ARMtools.getFilePattern(RS_PATH, "MWR/RET", yy, mm, dd)
-            !isnothing(nfile) && ARMtools.getMWRData(nfile, onlyvars=["time","surface_temp"]) ## ,addvars=["sonde_times"]) # 20210123 on sonde_launch_status
+            tmp = !isnothing(nfile) && ARMtools.getMWRData(nfile, onlyvars=["surface_temp"],addvars=["surface_pres"]) 
+            #sonde_times"]) # 20210123 on sonde_launch_status
+            # interpolating to radiosonde time resolution:
+            if !isnothing(nfile)
+                Dict(:time=>rs[:time],
+                 :SFT=>CloudnetTools.Interpolate2Cloudnet(rs, tmp[:time], tmp[:SFT]),
+                 :SFPa=>CloudnetTools.Interpolate2Cloudnet(rs, tmp[:time], tmp[:SURFACE_PRES])
+                )
+            else
+                @warn("No MWR file found $(nfile)")
+                nfile
+            end
         end;
 
         # Reading Infrared surface temperatures from ARM
@@ -83,11 +112,7 @@ for heute in datum
         end
         tir = !isnothing(tir_filen) ? ARMtools.getGNDIRTdata(tir_filen) : Dict(:time=>mwr[:time], :IRT=> mwr[:SFT])
 
-
-        # Reading Radiosonde data from ARM NSA
-        rs_filen = ARMtools.getFilePattern(RS_PATH, "INTERPOLATEDSONDE", yy, mm, dd)
-        !isnothing(rs_filen) ? rs = ARMtools.getSondeData(rs_filen) : (@warn "No Radiosonde $(heute)"; continue)
-
+        # If TIR is availabe, then add it to radiosonde data as surface level:
         typeof(tir)<:Dict && ARMtools.attach_Tₛ!(rs, tir[:IRT].-273.15, tir[:time]);
         rs[:height][end] < 45 && (rs[:height] .*= 1f3)  # converting km to m 
 
@@ -203,7 +228,10 @@ for heute in datum
             WD, WS
         end
 
-        # 14. storing results:
+        # 14. Get interpolated AO index:
+        ADDAOI && (aoi = aoindex_from_timeseries(aoi_fn, rs[:time]));
+
+        # 15. storing results:
         wdir_fn=joinpath(OUT_CSV, @sprintf("%04d/winddir_%04d%02d%02d_I.csv", yy, yy, mm, dd))
         CSV.write(wdir_fn, DataFrame(date=rs[:time],
                                      wvtdir=wdir,
@@ -215,6 +243,8 @@ for heute in datum
                                      lwp=vec(LWP[idx]),
                                      iwp=vec(IWP[idx]),
                                      Tskin=rs[:T][1,:],
+                                     T2m =mwr[:SFT],
+                                     Pa = mwr[:SFPa],
                                      cldBT=vec(CBT[idx]),
                                      cldTT=vec(CTT[idx]),
                                      cldLT=vec(CLT[idx]),
@@ -226,8 +256,9 @@ for heute in datum
                                      lpr=vec(Γₗᵣ[idx]),
                                      decoH=vec(decop_hgt[idx]),
                                      decoT=vec(topdecop_hgt[idx]),
-                                     coupled=ϑ_flag)
-                  )
+                                     coupled=ϑ_flag,
+                                     aoi=aoi.aoi)
+                 )
 
     end  # over days
 end  # over datum
