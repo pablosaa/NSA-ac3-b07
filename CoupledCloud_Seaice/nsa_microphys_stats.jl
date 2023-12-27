@@ -1,5 +1,5 @@
 ### A Pluto.jl notebook ###
-# v0.19.32
+# v0.19.35
 
 using Markdown
 using InteractiveUtils
@@ -32,6 +32,9 @@ begin
 	using PlutoUI
 end
 
+# ╔═╡ e19c5b78-95ac-4faf-b0a2-758aad46739a
+using GLM
+
 # ╔═╡ 123e1148-759c-11ed-29d7-e7fc1998111a
 html"""<style>
 main {
@@ -48,8 +51,8 @@ md"""
 # ╔═╡ 48c90554-bc23-4e44-a050-4bce892614a2
 # Defining data path
 begin
-	const BASE_PATH = "/projekt2/ac3data/B07-data/utqiagvik-nsa/csv_nsa/" #joinpath(homedir(), "LIM/scripts/NSA-ac3-b07/CoupledCloud_Seaice")
-	const LFSIC_PATH = joinpath(BASE_PATH, "data/SIC")
+	const BASE_PATH = joinpath(homedir(), "LIM/scripts/NSA-ac3-b07/CoupledCloud_Seaice") #"/projekt2/ac3data/B07-data/utqiagvik-nsa/csv_nsa/" #	
+        const LFSIC_PATH = joinpath(BASE_PATH, "data/SIC")
 	const MIPHY_PATH = joinpath(BASE_PATH, "data/csv_mosaic")
 end;
 
@@ -72,7 +75,7 @@ md"""
 
 # ╔═╡ e274212a-ef60-4258-930e-32d6d27f1e36
 begin
-    DBraw = CSV.read(joinpath(BASE_PATH, "yearly", "all_nsa_microphys_db_$(wintertime).csv"), header=1, skipto=2, DataFrame);
+    DBraw = CSV.read(joinpath(BASE_PATH, "data", "all_nsa_microphys_db_$(wintertime).csv"), header=1, skipto=2, DataFrame);
     # AOi flagging:
     DBraw[!, :aoₓ] = let tmp=fill(0, length(DBraw[!, :aoi]))
         tmp[DBraw[!,:aoi] .< -1] .= -1 #Pa] .≤ 101.0] .= -1 #
@@ -93,7 +96,7 @@ begin
     θ₀ = 235e0;
     θ₁ = 110e0;
 
-    DB = let tmp = filter(𝐷->(𝐷.cth - 𝐷.cbh)<(3f3) && !ismissing(𝐷.coupled), DBraw) #𝐷.μSIC>(0.0) mwvt>(0)  && 𝐷.μLF>(0.0)
+    DB = let tmp = filter(𝐷->(𝐷.clb < 𝐷.cth) && 𝐷.cth<(3f3) && !ismissing(𝐷.coupled), DBraw) #𝐷.μSIC>(0.0) mwvt>(0)  && 𝐷.μLF>(0.0)
         disallowmissing!(tmp, :coupled, error=false)
         filter!(𝐷-> 𝐷.wvtdir≥θ₀ || 𝐷.wvtdir≤θ₁, tmp)
         tmp.ier *= 1e6
@@ -113,11 +116,11 @@ begin
         tmp
     end
     # WINTER flagging
-    jahren = Year.(extrema(DB.date)) |> J->J[1].value:J[2].value
+    jahren = Year.(extrema(DB.date)) |> J->J[1].value:J[2].value  # +1 to include Nov, Dec of last year
     DB[!, :winter] = let tmp = fill(0, length(DB.date))
         foreach(zip(jahren[1:end-1], jahren[2:end])) do (yb, yt)
             ii = findall((DB.date .≥ Date(yb,11,1)) .&& (DB.date .≤ Date(yt,5,1) ) )
-            tmp[ii] .= yt
+            tmp[ii] .= yb
         end
         tmp
     end
@@ -156,6 +159,9 @@ begin
 	DB[!, :lf₀] = (DB[!, sicvar] .< sic₀)
 
 end;
+
+# ╔═╡ 0876e2d6-53b1-464d-9feb-48e34df65712
+names(DB)
 
 # ╔═╡ 838b64cb-5719-4a82-94e0-9bd3f5e18598
 md"""
@@ -247,20 +253,20 @@ end
 # ╔═╡ 3473d761-f57f-4d3f-beba-a8a516041da5
 begin
 	reff_plt = @df filter(c->1<c.der<150 && c.aoₓ==aoflag, DB) density(:der, group=(:lf₀, :coupled), label=hinweistext, lc=farben, linealpha=[.7 .7 1 1], l=[:dash :dash :solid :solid], xlim=(0, 60), xlabel=L"\mathrm{Liquid}~~\overline{r}_{eff}~ /~~\mathrm{\mu~m}", ylabel="PDF @ AOI $aoflag", trim=false, lw=[2 2 4 4], frame_style=:box, tickdir=:out,  minorticks=true, tickfontsize=13, guidefontsize=15, legendfontsize=12, size=(500,500), legend=:topright)
-	savefig(reff_plt, "/home/psgarfias/quicklooks/nsa_yearly/$(wintertime)_AOI$(aoflag)_DEF.png")
+	#savefig(reff_plt, "/home/psgarfias/quicklooks/nsa_yearly/$(wintertime)_AOI$(aoflag)_DEF.png")
 end
 
 # ╔═╡ 07d4b3f0-d37e-4b5a-ae8f-46033e57b112
 begin
 	ieff_plt = @df filter(c->1<c.ier<150 && c.aoₓ==aoflag, DB) density(:ier, group=(:lf₀, :coupled), label=hinweistext, lc=farben, linealpha=[.7 .7 1 1], l=[:dash :dash :solid :solid], xlim=(0, 70), xlabel=L"\mathrm{Ice}~~\overline{r}_{eff}~ /~~\mathrm{\mu~m}", ylabel="PDF @ AOI $aoflag", trim=false, lw=[2 2 4 4], frame_style=:box, tickdir=:out,  minorticks=true, tickfontsize=13, guidefontsize=15, legendfontsize=12, size=(500,500), legend=:topleft)
-	savefig(ieff_plt, "/home/psgarfias/quicklooks/nsa_yearly/$(wintertime)_AOI$(aoflag)_IEF.png")
+	#savefig(ieff_plt, "/home/psgarfias/quicklooks/nsa_yearly/$(wintertime)_AOI$(aoflag)_IEF.png")
 end
 
 # ╔═╡ 76c14688-0be1-43a5-932e-352ebac308b4
 begin
-	aoifig = @df DB density(:aoi, group=(:lf₀, :coupled), label=hinweistext, lc=farben, linealpha=[.7 .7 1 1], l=[:dash :dash :solid :solid], xlim=(-7, 7), xlabel="AO index", ylabel="PDF", trim=true, lw=[2 2 4 4], frame_style=:box, tickdir=:out,  minorticks=true, tickfontsize=13, guidefontsize=15, legendfontsize=12, size=(500,500), legend=:topright)
-
-	savefig(aoifig, "/home/psgarfias/quicklooks/nsa_yearly/$(wintertime)_AOI.png")
+	aoifig = @df DB density(:aoi, group=(:lf₀, :coupled), bandwidth=0.5, label=hinweistext, lc=farben, linealpha=[.7 .7 1 1], l=[:dash :dash :solid :solid], xlim=(-5.2, 5.2), xlabel="AO index", ylabel="PDF", trim=true, lw=[2 2 4 4], frame_style=:box, tickdir=:out,  minorticks=true, tickfontsize=13, guidefontsize=15, legendfontsize=12, size=(650,300), legend=:outerright, left_margins=3Plots.mm, bottom_margins=3Plots.mm)
+	vline!([-1 1], ls=:dash, la=0.5, lc=:black, label="")
+	#savefig(aoifig, "/home/psgarfias/quicklooks/nsa_yearly/$(wintertime)_AOI.png")
 end
 
 # ╔═╡ 700b9f2a-1e4d-4d30-a57e-06f067d2db93
@@ -355,8 +361,18 @@ end
 # ╔═╡ 4da11521-ba51-406a-ae1e-02d9355fbc29
 χfit.param
 
+# ╔═╡ 5a356040-ef21-412f-a129-1723dd1608c7
+# defining math function for geometrical mean:
+function Glu(x::AbstractVector)
+	x = filter(>(0), x)
+	X = @. log(x)
+	μ = exp(mean(X))
+	σ = exp(sqrt(mean((log.(x./μ)).^2)))
+	return μ, σ
+end
+
 # ╔═╡ 54e2dd01-1682-4f5d-ac35-35dd3cc084c9
-Nlu(DB[!,:iwp]), filter(>(0), DB.iwp) |> x->(mean(x), std(x))
+Nlu(DB[!,:iwp]), Glu(DB[!,:iwp]), filter(>(0), DB.iwp) |> x->(mean(x), std(x))
 
 # ╔═╡ 8e883748-effd-4898-b6ea-24de538fc5e8
 filter(V-> V.coupled==(true), DB) |> F->length(findall(<(10), F.decoH))/length(F.decoH)
@@ -520,53 +536,39 @@ begin
 	lf_lim = (-0.02, .55)
 	sic_lim = (7, 101) #(78, 101)
 	lf_xin = (.02:0.02:0.6)
-	sic_xin = (5:5:100) #(75:100)
+	sic_xin = (5, (10:10:100)...) |> collect #(75:100)
 	NNcol = cgrad(:starrynight, 15, categorical=true, alpha=0.5, rev=true, scale=:log10); #:grayyellow
 	NNlim =(10, 1.5f3)
-	# row LWP vs LF XXX
-	## a0 = @df filter(r->r.lwp>(0), DBraw) histogram2d(:μLF, :lwp, bins=30, color=NNcol, colorbar=false, colorbar_scale=:log10, ylim=(-10, 300), xlim=lf_lim, clim=NNlim); #ylim=(-15, 250),
-	# for LWP (decoupled):
-	## @df dat scatter!(:lf_bin, :μLFlwp, xerror=nσ*(:lf_var), yerror=:σLFlwp, group=:coupled, label="", mc=farben, markerstrokecolor=:grey2, msw=1, lc=farben, lw=1, la=0.5, marker=([:^ :o], 5, .9), ylabel="LWP / g m⁻²", ylim=(-10, 200))
-	## lf_yin = fᵢ(lf_xin, rfit[:μLFlwp].param)
-	## plot!(lf_xin, lf_yin, ribbon=(lf_yin .- fᵢ(lf_xin, Δβ[:μLFlwp][1]), fᵢ(lf_xin, Δβ[:μLFlwp][2]) .- lf_yin), lc=:black, lw=2, la=.7, fillalpha=0.9, label="", ann=(0.3, 180, @sprintf("r²=%3.2f", R²[:μLFlwp])))
-	#
-	# for LWP (coupled):
-	
+	# **********************************************
 	# LWP vs SIC
-	a1 = @df filter(r->r.lwp>(0), DBraw) histogram2d(:μSIC, (:lwp), bins=(60,200), color=NNcol, colorbar=false, colorbar_scale=:log10, ylim=(-15, 250), xlim=sic_lim, xflip=true, clim=NNlim );
+	#a1 = @df filter(r->r.lwp>(0), DBraw) histogram2d(:μSIC, (:lwp), bins=(60,200), color=NNcol, colorbar=false, colorbar_scale=:log10, ylim=(-15, 250), xlim=sic_lim, xflip=true, clim=NNlim );
 	# for LWP (decoupled):
 	
 	sic_yin = fₛ(sic_xin, rfit[:co][:μSIClwp].param)
-	plot!(sic_xin, sic_yin , ribbon=(sic_yin .- fₛ(sic_xin, Δβ[:co][:μSIClwp][1]), fₛ(sic_xin, Δβ[:co][:μSIClwp][2]) .- sic_yin), lc=:blue, lw=2, la=.7, fillalpha=0.5, fillcolor=farben[2], label="", ann=(88, 200, text(@sprintf("r²=%3.2f", R²[:co][:μSIClwp]), farben[2])))
+	a1 = plot(sic_xin, sic_yin, #ribbon=(sic_yin .- fₛ(sic_xin, Δβ[:co][:μSIClwp][1]), fₛ(sic_xin, Δβ[:co][:μSIClwp][2]) .- sic_yin), 
+	lc=:blue, lw=2, la=.7, fillalpha=0.5, fillcolor=farben[2], label="", ann=(85, 150, text(@sprintf("r²=%3.2f", R²[:co][:μSIClwp]), farben[2])))
 
 	sic_yin = fₛ(sic_xin, rfit[:de][:μSIClwp].param)
-	plot!(sic_xin, sic_yin , ribbon=(sic_yin .- fₛ(sic_xin, Δβ[:de][:μSIClwp][1]), fₛ(sic_xin, Δβ[:de][:μSIClwp][2]) .- sic_yin), lc=:red, lw=2, la=.7, fillalpha=0.5, fillcolor=farben[1], label="", ann=(28, 200, text(@sprintf("r²=%3.2f", R²[:de][:μSIClwp]), farben[1])))
+	plot!(sic_xin, sic_yin, #ribbon=(sic_yin .- fₛ(sic_xin, Δβ[:de][:μSIClwp][1]), fₛ(sic_xin, Δβ[:de][:μSIClwp][2]) .- sic_yin),
+	lc=:red, lw=2, la=.7, fillalpha=0.5, fillcolor=farben[1], label="", ann=(28, 150, text(@sprintf("r²=%3.2f", R²[:de][:μSIClwp]), farben[1])))
 	
-	@df dat scatter!(:sic_bin, :μSIClwp, xerror=:sic_var, yerror=:σSIClwp, group=:coupled, label="", mc=farben, markerstrokecolor=:grey4, msw=1, lc=farben, lw=1.5, la=0.5, marker=([:^ :o], 5, 0.9), ylabel="LWP / g m⁻²", xflip=true, xticks=(sic_xin[1:2:end], ""), ylim=(-15, 250))
+	@df dat scatter!(:sic_bin, :μSIClwp, xerror=:sic_var, yerror=:σSIClwp, group=:coupled, label="", mc=farben, markerstrokecolor=:grey4, msw=1, lc=farben, lw=1.5, la=0.5, marker=([:^ :o], 5, 0.9), ylabel="LWP [g m⁻²]", xflip=true, xticks=(sic_xin[1:2:end], ""), ylim=(-5, 180))
 	
 	#
 	# for LWP (coupled):
 	#@df dat[:co] scatter!(:sic_bin, :μSIClwp, xerror=:sic_var, yerror=:σSIClwp, label="", mc=:dodgerblue1, markerstrokecolor=:royalblue, lc=:royalblue, lw=2.5, la=0.5, ms=6, marker=:circle)
 	# *********************************************
-	# IWP vs LF  XXXX
-	## b0 = @df filter(r->r.iwp>(0), DBraw) histogram2d(:μLF, :iwp, bins=40, color=NNcol, colorbar=false, colorbar_scale=:log10 , ylim=(-30, 910), xlim=lf_lim, clim=NNlim);
-	# for IWP (decoupled):
-	## @df dat scatter!(:lf_bin, :μLFiwp, xerror=nσ*(:lf_var), yerror=:σLFiwp, group=:coupled, label="", mc=farben, markerstrokecolor=:grey3, mws=1, lc=farben, lw=1.5, la=0.5, marker=([:^ :o], 5, 0.9), ylabel="IWP / g m⁻²", xlabel="LF")
-	## lf_yin = fᵢ(lf_xin, rfit[:μLFiwp].param)
-	## plot!(lf_xin, lf_yin, ribbon=(lf_yin .- fᵢ(lf_xin, Δβ[:μLFiwp][1]), fᵢ(lf_xin, Δβ[:μLFiwp][2]) .- lf_yin), lc=:black, lw=2, la=.7, fillalpha=0.3, label="", ann=(0.45, 800, @sprintf("r²=%3.2f", R²[:μLFiwp])))
-	
-	# for IWP (coupled):
-	#@df dat[:co] scatter!(:lf_bin, :μLFiwp, xerror=nσ*(:lf_var), yerror=:σLFiwp, label="", mc=:dodgerblue1, markerstrokecolor=:royalblue, lc=:royalblue, lw=2.5, la=0.5, ms=6, marker=:circle, ylabel="IWP / g m⁻²", xlabel="LF")
-	
 	# IWP vs SIC
-	b1 = @df filter(r->r.iwp>(0), DBraw) histogram2d(:μSIC, :iwp, bins=(60,500), color=NNcol, colorbar=false, colorbar_scale=:log10, ylim=(-10, 210), xlim=sic_lim, clim=NNlim);
+	#b1 = @df filter(r->r.iwp>(0), DBraw) histogram2d(:μSIC, :iwp, bins=(60,500), color=NNcol, colorbar=false, colorbar_scale=:log10, ylim=(-10, 210), xlim=sic_lim, clim=NNlim);
 	# for IWP (decoupled):
-	@df dat scatter!(:sic_bin, :μSICiwp, xerror=:sic_var, yerror=:σSICiwp, group=:coupled, label="", mc=farben, markerstrokecolor=:grey5, lc=farben, lw=1.5, la=0.5, marker=([:^ :o], 5, 0.9), xlabel="SIC [%]", ylabel="IWP / g m⁻²", legend=:topright, legendfontsize=9, xflip=true, xticks=sic_xin[1:2:end], ylim=(-5, 300))
+	b1 = @df dat scatter(:sic_bin, :μSICiwp, xerror=:sic_var, yerror=:σSICiwp, group=:coupled, label="", mc=farben, markerstrokecolor=:grey5, lc=farben, lw=1.5, la=0.5, marker=([:^ :o], 5, 0.9), xlabel="SIC [%]   "*L"f(\mathrm{WVT})", ylabel="IWP [g m⁻²]", legend=:topright, legendfontsize=9, xflip=true, xticks=sic_xin[1:2:end], ylim=(-5, 180))
 	sic_yin = fₛ(sic_xin, rfit[:co][:μSICiwp].param)
-	plot!(sic_xin, sic_yin , ribbon=(sic_yin.-fₛ(sic_xin, Δβ[:co][:μSICiwp][1]), fₛ(sic_xin, Δβ[:co][:μSICiwp][2]).-sic_xin), lc=:blue, lw=2, la=.7, fillalpha=0.3, label="", ann=(88, 150, text(@sprintf("r²=%3.2f", R²[:co][:μSICiwp]), color=farben[2])), top_margins=-4Plots.mm)
+	plot!(sic_xin, sic_yin, #ribbon=(sic_yin.-fₛ(sic_xin, Δβ[:co][:μSICiwp][1]), fₛ(sic_xin, Δβ[:co][:μSICiwp][2]).-sic_xin), 
+	lc=:blue, lw=2, la=.7, fillalpha=0.5, fillcolor=farben[2], label="", ann=(88, 150, text(@sprintf("r²=%3.2f", R²[:co][:μSICiwp]), color=farben[2])), top_margins=-4Plots.mm)
 
 	sic_yin = fₛ(sic_xin, rfit[:de][:μSICiwp].param)
-	plot!(sic_xin, sic_yin , ribbon=(sic_yin .- fₛ(sic_xin, Δβ[:de][:μSICiwp][1]), fₛ(sic_xin, Δβ[:de][:μSICiwp][2]) .- sic_yin), lc=:red, lw=2, la=.7, fillalpha=0.3, label="", ann=(28, 150, text(@sprintf("r²=%3.2f", R²[:de][:μSICiwp]), color=farben[1])), top_margins=-4Plots.mm)
+	plot!(sic_xin, sic_yin, #ribbon=(sic_yin .- fₛ(sic_xin, Δβ[:de][:μSICiwp][1]), fₛ(sic_xin, Δβ[:de][:μSICiwp][2]).- sic_yin), 
+	lc=:red, lw=2, la=.7, fillalpha=0.5, fillcolor=farben[1], label="", ann=(28, 150, text(@sprintf("r²=%3.2f", R²[:de][:μSICiwp]), color=farben[1])), top_margins=-4Plots.mm)
 	
 	
 	# for IWP (coupled):
@@ -577,18 +579,21 @@ begin
 	# for Der:
 	## @df dat scatter!(:lf_bin, :μLFder, xerror=:lf_var, yerror=:σLFder, group=:coupled, label="", mc=farben, markerstrokecolor=:grey2, msw=1, lc=farben, lw=1.5, la=0.5, marker=([:^ :o], 5, 0.9), ylabel=L"<r_{eff}>~/~\mathrm{\mu m}" )
 	## plot!((.0:0.02:0.6), x->fᵢ(x, rfit[:μLFder].param), lc=:royalblue1, lw=2, la=.5, label="")
-	
-	# Der vs SIC
-	c1 = @df filter(r->r.der>(0), DB) histogram2d(:μSIC, :der, bins=(50, 300), color=NNcol, colorbar=false, colorbar_scale=:log10 , ylim=(0, 50), xlim=sic_lim, clim=NNlim);
-	# for Der:
-	@df dat scatter!(:sic_bin, :μSICder, xerror=:sic_var, yerror=:σSICder, group=:coupled, label="", mc=farben, ylabel="droplet r_eff", markerstrokecolor=:grey7, msw=1, lc=farben, lw=1.5, la=0.5, marker=([:^ :o], 5, 0.9), xflip=true, xticks=(sic_xin[1:2:end], ""))
-	plot!(sic_xin, x->fₛ(x, rfit[ss][:μSICder].param), lc=:black, lw=2, la=.5, label="")
 
+	# *******************************************************
+	# Der vs SIC
+	#c1 = @df filter(r->r.der>(0), DB) histogram2d(:μSIC, :der, bins=(50, 300), color=NNcol, colorbar=false, colorbar_scale=:log10 , ylim=(0, 50), xlim=sic_lim, clim=NNlim);
+	c1 = @df dat scatter(:sic_bin, :μSICder, xerror=:sic_var, yerror=:σSICder, group=:coupled, label="", mc=farben, ylabel="droplet  "*L"r_{eff}"*" [μm]", markerstrokecolor=:grey7, msw=1, lc=farben, lw=1.5, la=0.5, marker=([:^ :o], 5, 0.9), xflip=true, xticks=(sic_xin[1:2:end], ""), ylim=(0,30))
+	plot!(sic_xin, x->fₛ(x, rfit[:co][:μSICder].param), lc=:blue, lw=2, la=.7, label="")
+	plot!(sic_xin, x->fₛ(x, rfit[:de][:μSICder].param), lc=:red, lw=2, la=.7, label="")
+	
+	# *********************************************************
 	# Ier vs SIC
-	d1 = @df filter(r->r.ier>(1), DB) histogram2d(:μSIC, :ier, bins=(50, 300), color=NNcol, colorbar=false, colorbar_scale=:log10 , xlim=sic_lim, clim=NNlim, ylim=(0, 60))
+	#d1 = @df filter(r->r.ier>(1), DB) histogram2d(:μSIC, :ier, bins=(50, 300), color=NNcol, colorbar=false, colorbar_scale=:log10 , xlim=sic_lim, clim=NNlim, ylim=(0, 60))
 	# for Ier:
-	@df dat scatter!(:sic_bin, :μSICier, xerror=:sic_var, yerror=:σSICier, group=:coupled, label="", mc=farben, ylabel="ice r_eff", markerstrokecolor=:grey7, msw=1, lc=farben, lw=1.5, la=0.5, marker=([:^ :o], 5, 0.9), xflip=true, xticks=sic_xin[1:2:end], xlabel="SIC [%]")
-	plot!(sic_xin, x->fₛ(x, rfit[ss][:μSICier].param), lc=:black, lw=2, la=.5, label="")
+	d1 = @df dat scatter(:sic_bin, :μSICier, xerror=:sic_var, yerror=:σSICier, group=:coupled, label="", mc=farben, ylabel="ice "*L"r_{eff}"*" [μm]", markerstrokecolor=:grey7, msw=1, lc=farben, lw=1.5, la=0.5, marker=([:^ :o], 5, 0.9), xflip=true, xticks=sic_xin[1:2:end], xlabel="SIC [%]   "*L"f(\mathrm{WVT})", ylim=(10, 50))
+	plot!(sic_xin, x->fₛ(x, rfit[:co][:μSICier].param), lc=:blue, lw=2, la=.5, label="")
+	plot!(sic_xin, x->fₛ(x, rfit[:de][:μSICier].param), lc=:red, lw=2, la=.5, label="")
 	
 	cc = plot(a1,c1, b1, d1, layout=(2,2), tickdir=:out, minorticks=true, guidefontsize=14, tickfontsize=13, size=(800,600), dpi=600, left_margin=4Plots.mm, framestyle=:box)
 	
@@ -618,25 +623,70 @@ begin
 end
 
 # ╔═╡ 0406bc8a-6054-4b40-9b87-be632dc28d32
-@df filter(d->!isnan(d.lwp), transform(DB, :date=> ByRow(x->Year(x)) => :date)) groupedboxplot(:date, :lwp, group=:coupled, bar_width=0.4, outliers=false, fillcolor=farben, label=["de" "co"], ylabel="LWP", size=(850,400))
+@df filter(d->d.σSIC>(0), DB) groupedboxplot(:winter, :σSIC./:μSIC, group=:coupled, bar_width=0.4, outliers=false, fillcolor=farben, label=["de" "co"], ylabel="LWP", size=(850,400))
 
 # ╔═╡ 6913d517-e07c-4962-9c6b-d090b1bb8faa
-strwinter = [@sprintf("%04d/%02d", jj, (jj+1)-2000) for jj in jahren[1:end,1]];
+strwinter = [@sprintf("%04d/%02d", jj, (jj+1)-2000) for jj in jahren[1:end-1,1]];
+
+# ╔═╡ ef4e30fb-e345-49df-9569-83b523cb1207
+strwinter
+
+# ╔═╡ 49654852-af74-468f-9ddd-cefa4f055907
+begin
+	var_unit = Dict(:lwp=>"g m⁻²", :iwp=>"g m⁻²", :der=>"μm", :ier=>"μm", :T2m=>"°C", :Γ=>"K km⁻¹", :δₕ=>"m", :clb=>"m", :Tskin=>"°C", :σSIC=>"%", :AμSIC=>"%", :RμSIC=>"%");
+	var_label = Dict(:lwp=>"LWP", :iwp=>"IWP", :der=>"Droplet  "*L"r_{eff}", :ier=>"Ice   "*L"r_{eff}", :T2m=>"T2m", :Γ=>L"Γ_{cloud}", :δₕ=>"Cloud depth "*L"δH", :clb=>"Liquid cloud base height", :Tskin=>"Skin Temp.", :σSIC=>"SIC  "*L" f(\mathrm{WVT})", :AμSIC=>"SIC 50km "*L"\oslash", :RμSIC=>"SIC  "*L"f(\star)");
+	var_lege = Dict(:lwp=>L"\overline{LWP}", :iwp=>L"\overline{IWP}", :der=>L"\overline{r_{eff}}", :ier=>L"\overline{r_{eff}}", :T2m=>L"\overline{T_{2m}}", :Γ=>L"\overline{Γ}_{cloud}", :δₕ=>L"\overline{δH}_{cloud}", :clb=>L"\overline{CBH}", :Tskin=>L"\overline{T}_{skin}", :σSIC=>L"\overline{SIC}", :AμSIC=>L"\overline{SIC}", :RμSIC=>L"\overline{SIC}");
+end
+
+# ╔═╡ 5d562554-9112-4856-b7a4-5e8ff22ea3d5
+function co_de_fit(newDB)
+	tmdf = groupby(newDB, :winter) |> d->combine(d) do df
+			Y_co = mean(filter(d->d.coupled==(true),df).Y_var)
+			Y_de = mean(filter(d->d.coupled==(false),df).Y_var)
+			(Y_co =Y_co, Y_de=Y_de, lin_co=0.0, lin_de=0.0)
+	end
+	#var_co = Symbol(var,:_co)
+	#var_de = Symbol(var,:_de)
+	#tmdf = rename(mdf, Dict(var_co => :Y_co, var_de => :Y_de))
+	f_co = lm(@formula(Y_co ~ winter), tmdf)
+	f_de = lm(@formula(Y_de ~ winter), tmdf)
+	tmdf[!,:lin_co] = predict(f_co)
+	tmdf[!,:lin_de] = predict(f_de)
+	tmdf[!,:coef_co] .= coef(f_co)[2]
+	tmdf[!,:coef_de] .= coef(f_de)[2]
+	tmdf[!,:hig_co] .= confint(f_co)[end,2]
+	tmdf[!,:low_co] .= confint(f_co)[end,1]
+	tmdf[!,:hig_de] .= confint(f_de)[end,2]
+	tmdf[!,:low_de] .= confint(f_de)[end,1]
+	return tmdf #rename(tmdf,  Dict(:Y_co=>var_co, :Y_de=>var_de))
+end
 
 # ╔═╡ 6d4a626d-69a3-4538-8d6e-30e22a3e51ed
 begin
-	lwpts = @df filter(d->!isnan(d.lwp), DB) groupedboxplot(:winter, :lwp, group=:coupled, bar_width=0.35, outliers=false, notch=true, fillcolor=farben, fillalpha=0.8, label=["de" "co"], xtick=(jahren[2:end], strwinter), xrot=35, xlabel="Wintertime", ylabel="LWP [g m⁻²]", size=(850,400), left_margin=3Plots.mm, bottom_margin=7Plots.mm, tickdir=:out, yminorticks=true, guidefontsize=14, ytickfontsize=13, xtickfontsize=9);
-	# Calculating mean of LWP co & de:
-	@df groupby(filter(d->!isnan(d.lwp), DB), :winter) |> d->combine(d) do df
-	(lwp_co = mean(filter(d->d.coupled==(true),df).lwp), lwp_de = mean(filter(d->d.coupled==(false),df).lwp))# 
-		end scatter!(lwpts, :winter.+[-0.1 0.1], [:lwp_de, :lwp_co], m=:o, markerstrokewidth=2, mc=farben, label="mean")
+	lwpts = let var=:σSIC
+		fk=1; fb=0 #-273.15;
+		
+		newDB = rename(filter(d->!isnan(d[var]), DB), Dict(var=>:Y_var))  # && (d.aoₓ!=(0))
+		newDB[!, :Y_var] .*=fk
+		newDB[!, :Y_var] .+=fb
+		tmpplot = @df newDB groupedboxplot(:winter, :Y_var, group=:coupled, bar_width=0.5, outliers=false, notch=true, la=0.7, fillcolor=farben, fillalpha=0.7, label="", xtick=(jahren, strwinter), xrot=33, xlabel="Wintertime", ylabel=var_label[var]*" [$(var_unit[var])]", size=(950,550), left_margin=5Plots.mm, bottom_margin=7Plots.mm, tickdir=:out, yminorticks=true, guidefontsize=15, ytickfontsize=14, xtickfontsize=10, legendfontsize=12,
+		#ylim = (-35, 9),
+		);
+		# Calculating mean of LWP co & de:
+		mdf = co_de_fit(newDB)
+		
+		@df mdf plot!(tmpplot, :winter.+[-0.1 0 0.1 0], [:Y_de, :lin_de, :Y_co, :lin_co], plot=[:scatter :line], m=[:^ :none :o :none], lc=[false farben[1] false farben[2]], lw=[0 2], ms=4, markerstrokewidth=1, mc=reshape(repeat(farben,2),1,4), 
+		legend=false, #:topleft,
+		label=["(de)   "*var_lege[var] @sprintf("%+3.1f %s/yr @CI₉₅ [%+3.1f %3.1f]", last(:coef_de), var_unit[var], last(:low_de), last(:hig_de)) "(co)   "*var_lege[var] @sprintf("%+3.1f %s/yr @CI₉₅ [%+3.1f %3.1f]", last(:coef_co), var_unit[var], last(:low_co), last(:hig_co))], dpi=400)
+		tmpplot
+	end
 end
 
 # ╔═╡ acb055d8-44b0-45f9-989c-0e33fa8f86d5
-@df filter(d->!isnan(d.μSIC), DB) groupedboxplot(:winter, :σSIC./(:μSIC.-101), group=:coupled, outliers=false, color=farben)
+@df filter(d->d.σSIC>(0), DB) groupedboxplot(:winter, :σSIC./(:μSIC), group=:coupled, outliers=false, color=farben)
 
 # ╔═╡ 2cc166c0-464b-41a4-be91-44d936f1eedf
-@df filter(d->!isnan(d.lwp) && d.paₓ==(-1), DB) groupedboxplot(:winter, :lwp, group=:coupled, bar_width=0.4, outliers=false, fillcolor=farben, label=["de" "co"], xtick=jahren, ylabel="LWP [g m⁻²]", size=(850,400), left_margin=3Plots.mm, title="Pressure level L")
+@df filter(d->!isnan(d.lwp) && d.paₓ==(-0), DB) groupedboxplot(:winter, :lwp, group=:coupled, bar_width=0.4, outliers=false, fillcolor=farben, label=["de" "co"], xtick=jahren, ylabel="LWP [g m⁻²]", size=(850,400), left_margin=3Plots.mm, title="Pressure level L")
 
 # ╔═╡ 4a5f18c6-3c6a-40f5-ad18-d1c46048ed3d
 # ICE WATER PATH
@@ -652,8 +702,11 @@ end
 
 # ╔═╡ 4c56ee27-9a31-47e7-9959-05c342b0c4d2
 begin
-	@df filter(d->!isnan(d.RμSIC) .&& d.paₓ==(1) .&& d.coupled==true, DB) violin(:winter, :RμSIC, outliers=false, side=:right, label="co", xtick=jahren)
-	@df filter(d->!isnan(d.RμSIC) .&& d.paₓ==(1) .&& d.coupled==false, DB) violin!(:winter, :RμSIC, outliers=false, side=:left, label="de", xtick=jahren, ylabel="50km sector SIC", size=(850,400), left_margin=3Plots.mm, title="Pressure level H", legend=:bottom)
+	let var=:AμSIC
+	pltsic = @df filter(d->d.μSIC>(0) .&& d.coupled==true, DB) violin((:winter).+.015, :μSIC, outliers=false, side=:right, label="co", xtick=(jahren, strwinter), xrot=35, bandwidth=3)
+	@df filter(d->d.μSIC>(0) .&& d.coupled==false, DB) violin!((:winter).-.015, :μSIC, outliers=false, side=:left, label="de", xtick=(jahren, strwinter), xrot=30, xlabel="Wintertime", ylabel=var_label[var]*"  [$(var_unit[var])]", xtickfontsize=9, ytickfontsize=14, guidefontsize=14, size=(850,400), left_margin=3Plots.mm, legend=false, bandwidth=3, left_margins=3Plots.mm, bottom_margins=5Plots.mm)
+	pltsic
+	end
 end
 
 # ╔═╡ 2a4020e5-e353-4ca6-8b18-057c495209a6
@@ -682,6 +735,7 @@ CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
 DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
 Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
 Distributions = "31c24e10-a181-5473-b8eb-7969acd0382f"
+GLM = "38e38edf-8417-5370-95a0-9cbb8c7f171a"
 JLD2 = "033835bb-8acc-5ee8-8aae-3f567f8a3819"
 LaTeXStrings = "b964fa9f-0449-5b57-a5c2-d3ea65f4040f"
 LsqFit = "2fda8390-95c7-5789-9bda-21331edee243"
@@ -699,8 +753,10 @@ DataFrames = "~1.6.1"
 Distributions = "~0.25.79"
 JLD2 = "~0.4.30"
 LaTeXStrings = "~1.3.0"
+LsqFit = "~0.15.0"
+Plots = "~1.39.0"
 PlutoUI = "~0.7.50"
-PrettyTables = "~2.2.3"
+StatsBase = "~0.34.2"
 StatsPlots = "~0.15.4"
 """
 
@@ -710,7 +766,7 @@ PLUTO_MANIFEST_TOML_CONTENTS = """
 
 julia_version = "1.9.0"
 manifest_format = "2.0"
-project_hash = "a23b5da082c6e7ac2898051ec31d7fd8ba0687b6"
+project_hash = "d796d70c44234b20238a7210613d3847f05716f9"
 
 [[deps.AbstractFFTs]]
 deps = ["LinearAlgebra"]
@@ -975,9 +1031,9 @@ uuid = "8ba89e20-285c-5b6f-9357-94700520ee1b"
 
 [[deps.Distributions]]
 deps = ["FillArrays", "LinearAlgebra", "PDMats", "Printf", "QuadGK", "Random", "SpecialFunctions", "Statistics", "StatsAPI", "StatsBase", "StatsFuns"]
-git-tree-sha1 = "a6c00f894f24460379cb7136633cef54ac9f6f4a"
+git-tree-sha1 = "9242eec9b7e2e14f9952e8ea1c7e31a50501d587"
 uuid = "31c24e10-a181-5473-b8eb-7969acd0382f"
-version = "0.25.103"
+version = "0.25.104"
 
     [deps.Distributions.extensions]
     DistributionsChainRulesCoreExt = "ChainRulesCore"
@@ -1135,6 +1191,12 @@ git-tree-sha1 = "d972031d28c8c8d9d7b41a536ad7bb0c2579caca"
 uuid = "0656b61e-2033-5cc2-a64a-77c0f6c09b89"
 version = "3.3.8+0"
 
+[[deps.GLM]]
+deps = ["Distributions", "LinearAlgebra", "Printf", "Reexport", "SparseArrays", "SpecialFunctions", "Statistics", "StatsAPI", "StatsBase", "StatsFuns", "StatsModels"]
+git-tree-sha1 = "97829cfda0df99ddaeaafb5b370d6cab87b7013e"
+uuid = "38e38edf-8417-5370-95a0-9cbb8c7f171a"
+version = "1.8.3"
+
 [[deps.GR]]
 deps = ["Artifacts", "Base64", "DelimitedFiles", "Downloads", "GR_jll", "HTTP", "JSON", "Libdl", "LinearAlgebra", "Pkg", "Preferences", "Printf", "Random", "Serialization", "Sockets", "TOML", "Tar", "Test", "UUIDs", "p7zip_jll"]
 git-tree-sha1 = "d73afa4a2bb9de56077242d98cf763074ab9a970"
@@ -1245,9 +1307,9 @@ version = "1.0.0"
 
 [[deps.JLD2]]
 deps = ["FileIO", "MacroTools", "Mmap", "OrderedCollections", "Pkg", "PrecompileTools", "Printf", "Reexport", "Requires", "TranscodingStreams", "UUIDs"]
-git-tree-sha1 = "9bbb5130d3b4fa52846546bca4791ecbdfb52730"
+git-tree-sha1 = "c2d0f45afcb5f6209155670bffd100c3b4937ea3"
 uuid = "033835bb-8acc-5ee8-8aae-3f567f8a3819"
-version = "0.4.38"
+version = "0.4.40"
 
 [[deps.JLFzf]]
 deps = ["Pipe", "REPL", "Random", "fzf_jll"]
@@ -1655,10 +1717,10 @@ uuid = "21216c6a-2e73-6563-6e65-726566657250"
 version = "1.4.0"
 
 [[deps.PrettyTables]]
-deps = ["Crayons", "LaTeXStrings", "Markdown", "Printf", "Reexport", "StringManipulation", "Tables"]
-git-tree-sha1 = "6842ce83a836fbbc0cfeca0b5a4de1a4dcbdb8d1"
+deps = ["Crayons", "LaTeXStrings", "Markdown", "PrecompileTools", "Printf", "Reexport", "StringManipulation", "Tables"]
+git-tree-sha1 = "88b895d13d53b5577fd53379d913b9ab9ac82660"
 uuid = "08abe8d2-0d0c-5749-adfa-8a2ac140af0d"
-version = "2.2.8"
+version = "2.3.1"
 
 [[deps.Printf]]
 deps = ["Unicode"]
@@ -1764,6 +1826,11 @@ version = "1.1.1"
 deps = ["Distributed", "Mmap", "Random", "Serialization"]
 uuid = "1a1011a3-84de-559e-8e89-a11a2f7dc383"
 
+[[deps.ShiftedArrays]]
+git-tree-sha1 = "503688b59397b3307443af35cd953a13e8005c16"
+uuid = "1277b4bf-5013-50f5-be3d-901d8477a67a"
+version = "2.0.0"
+
 [[deps.Showoff]]
 deps = ["Dates", "Grisu"]
 git-tree-sha1 = "91eddf657aca81df9ae6ceb20b959ae5653ad1de"
@@ -1843,6 +1910,12 @@ version = "1.3.0"
     [deps.StatsFuns.weakdeps]
     ChainRulesCore = "d360d2e6-b24c-11e9-a2a3-2a2ae2dbcce4"
     InverseFunctions = "3587e190-3f89-42d0-90ee-14403ec27112"
+
+[[deps.StatsModels]]
+deps = ["DataAPI", "DataStructures", "LinearAlgebra", "Printf", "REPL", "ShiftedArrays", "SparseArrays", "StatsBase", "StatsFuns", "Tables"]
+git-tree-sha1 = "8cc7a5385ecaa420f0b3426f9b0135d0df0638ed"
+uuid = "3eaba693-59b7-5ba5-a881-562e759f1c8d"
+version = "0.7.2"
 
 [[deps.StatsPlots]]
 deps = ["AbstractFFTs", "Clustering", "DataStructures", "Distributions", "Interpolations", "KernelDensity", "LinearAlgebra", "MultivariateStats", "NaNMath", "Observables", "Plots", "RecipesBase", "RecipesPipeline", "Reexport", "StatsBase", "TableOperations", "Tables", "Widgets"]
@@ -2233,6 +2306,7 @@ version = "1.4.1+0"
 # ╟─89809ea8-94a4-4158-8f23-b4a2322532b2
 # ╠═db52e7c0-5a8c-454a-bf1e-df9d377eff25
 # ╠═f5a31896-eeb0-4a49-9178-3995fde42a55
+# ╠═0876e2d6-53b1-464d-9feb-48e34df65712
 # ╟─838b64cb-5719-4a82-94e0-9bd3f5e18598
 # ╠═e530627f-4fa8-4006-b119-55f9efe72d21
 # ╠═018fc44f-0e6b-4eb2-8b17-4ee61015fb7c
@@ -2256,6 +2330,7 @@ version = "1.4.1+0"
 # ╠═700b9f2a-1e4d-4d30-a57e-06f067d2db93
 # ╠═6b11b88f-66e4-4630-a9a0-bc479cda43e1
 # ╠═ac217227-a672-4f9c-80ff-277c57e473f9
+# ╠═5a356040-ef21-412f-a129-1723dd1608c7
 # ╠═54e2dd01-1682-4f5d-ac35-35dd3cc084c9
 # ╠═8e883748-effd-4898-b6ea-24de538fc5e8
 # ╠═c5b02891-e561-4667-a07b-a29f52bb66c4
@@ -2273,7 +2348,11 @@ version = "1.4.1+0"
 # ╠═aab6bedd-c076-491f-b590-852f179e860b
 # ╠═0406bc8a-6054-4b40-9b87-be632dc28d32
 # ╠═6913d517-e07c-4962-9c6b-d090b1bb8faa
+# ╠═ef4e30fb-e345-49df-9569-83b523cb1207
+# ╠═e19c5b78-95ac-4faf-b0a2-758aad46739a
+# ╠═49654852-af74-468f-9ddd-cefa4f055907
 # ╠═6d4a626d-69a3-4538-8d6e-30e22a3e51ed
+# ╠═5d562554-9112-4856-b7a4-5e8ff22ea3d5
 # ╠═acb055d8-44b0-45f9-989c-0e33fa8f86d5
 # ╠═2cc166c0-464b-41a4-be91-44d936f1eedf
 # ╠═4a5f18c6-3c6a-40f5-ad18-d1c46048ed3d
