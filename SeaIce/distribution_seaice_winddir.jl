@@ -18,7 +18,7 @@ SEAICE = include(joinpath(homedir(), "LIM/repos/SEAICEtools.jl/src/SEAICEtools.j
 const PROD_PATH = "/projekt2/ac3data/B07-data/SeaIce";  # joinpath(homedir(), "LIM/data/B07/SeaIce");
 const RVNAV_PATH = joinpath(homedir(), "LIM/data/B07/arctic-mosaic");
 const LATLON_FILE = joinpath(PROD_PATH, "amsr2", "LongitudeLatitudeGrid-n3125-ChukchiBeaufort.h5");
-const DATCSV_PATH = joinpath(homedir(), "LIM/scripts/NSA-ac3-b07/CoupledCloud_Seaice/data");
+const DATCSV_PATH = "/projekt2/ac3data/B07-data/utqiagvik-nsa/";  #joinpath(homedir(), "LIM/scripts/NSA-ac3-b07/CoupledCloud_Seaice/data");
 const DATOUT_PATH = joinpath(homedir(), "LIM/scripts/NSA-ac3-b07/SeaIce/data"); ## old: CoupledCloud_Seaice/data");
 const R_lim = 50e3;   # radius around RV polarstern
 const MAKEPLOTS = false
@@ -38,7 +38,7 @@ dist_wdir = Dict(data=>Dict() for data ∈ PRODUCTS)
 #mm = 4
 #dd = 15
 
-datum = ((11,2021), (12,2021), (1,2022), (2,2022), (3,2022), (4,2022)) #(11,2021), 
+datum = ((11,2013), (12,2013)) #, (1, 2023), (2, 2023),  (3,2023), (4,2023)) #(11,2021), 
 days = (1:31)
 
 !isempty(ARGS) && foreach(ARGS) do argin

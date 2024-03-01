@@ -1,8 +1,18 @@
 #!/home/psgarfias/.local/bin/julia
 #
 #=
-Script to join into a single CSV data file the daily dataset from
-Cloudnet microphysical properties and ARMSR2 sea ice concentration.
+Script to join into a daily CSV data files into a singe winterly dataset.
+The dataset is comprised of Cloudnet microphysical properties and ARMSR2 sea ice concentration
+as a function of the water vapor transport direction.
+
+This script needs:
+* daily CSV data files after processing for WVT and cloud layers from Cloudnet
+* JLD2 sea ice concentration averages at the direction of the WVT
+
+This script will output:
+* a yearly CSV data file e.g.  all_nsa_microphys_db_2012-2013.csv
+which contains the database from wintertime 2012 Nov to 2013 April with
+atmospheric, cloud, and sea ice information merged.
 =#
 using StatsPlots
 using Statistics
@@ -20,7 +30,7 @@ const LFSIC_PATH = joinpath(BASE_PATH, "SeaIce/data")
 const MIPHY_PATH = joinpath(DATA_PATH, "csv_nsa")
 
 # defining the wintertime to process e.g. for year yy:Nov, Dec to yy+1:Jan, Feb, Mar, Apr.
-years = (2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021)
+years = (2013,) # 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023)
 
 
 for jahr ∈ years

@@ -22,7 +22,7 @@ using ATMOStools
 const CAMPAIGN = "utqiagvik-nsa" # "arctic-mosaic" #
 const DATA_PATH = "/projekt2/ac3data/B07-data" #joinpath(homedir(), "LIM/data/B07")
 const LPR_PATH = joinpath(DATA_PATH, "LP")
-const CLNET_PATH = joinpath(DATA_PATH, CAMPAIGN, "CloudNet","1.8.0", "output")
+const CLNET_PATH = joinpath(DATA_PATH, CAMPAIGN, "CloudNet","1.9.0", "output")
 const CLNET_PRODUCT = "CEIL10m" # "TROPOS/processed/categorize"
 const RS_PATH = joinpath("/projekt2/remsens/data_new/site-campaign", CAMPAIGN)
 const OUT_CSV = joinpath(DATA_PATH, CAMPAIGN, "csv_nsa")
@@ -43,7 +43,7 @@ if ADDAOI
 end
 
 
-winter_jahr = 2012:2021;
+winter_jahr = 2013:2013;
 #( (winter_jahr,11), (winter_jahr,12), (,1), (2019,2), (2019,3), (2019,4))
 days = (1:31) #21  #18 #28 #6
 
@@ -52,7 +52,7 @@ days = (1:31) #21  #18 #28 #6
 	eval(ex)
 end
 
-datum = [Date(yy, 11)+Month(m) for yy ∈ winter_jahr for m ∈ 0:5]
+datum = [Date(yy, 11)+Month(m) for yy ∈ winter_jahr for m ∈ 0:1]
 
 for heute in datum
     yy, mm = year(heute), month(heute)
@@ -89,7 +89,13 @@ for heute in datum
 
         # Reading ARM microwave radiometer file:
         mwr = let nfile=ARMtools.getFilePattern(RS_PATH, "MWR/RET", yy, mm, dd)
-            tmp = !isnothing(nfile) && ARMtools.getMWRData(nfile, onlyvars=["surface_temp"],addvars=["surface_pres"]) 
+            tmp = if !isnothing(nfile)
+                ARMtools.getMWRData(nfile, onlyvars=["surface_temp"],addvars=["surface_pres"]) 
+            else
+                nfile=ARMtools.getFilePattern(RS_PATH, "MWR/LOS", yy, mm, dd)
+                tmp = !isnothing(nfile) && ARMtools.getMWRData(nfile, onlyvars=["time"],addvars=["tkair"])
+                Dict(:time=>tmp[:time], :SFT=>tmp[:TKAIR], :SURFACE_PRES=>fill(NaN32, length(tmp[:time])))
+            end
             #sonde_times"]) # 20210123 on sonde_launch_status
             # interpolating to radiosonde time resolution:
             if !isnothing(nfile)
