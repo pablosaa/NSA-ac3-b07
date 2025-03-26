@@ -1,17 +1,19 @@
 ### A Pluto.jl notebook ###
-# v0.19.35
+# v0.20.4
 
 using Markdown
 using InteractiveUtils
 
 # This Pluto notebook uses @bind for interactivity. When running this notebook outside of Pluto, the following 'mock version' of @bind gives bound variables a default value (instead of an error).
 macro bind(def, element)
+    #! format: off
     quote
         local iv = try Base.loaded_modules[Base.PkgId(Base.UUID("6e696c72-6542-2067-7265-42206c756150"), "AbstractPlutoDingetjes")].Bonds.initial_value catch; b -> missing; end
         local el = $(esc(element))
         global $(esc(def)) = Core.applicable(Base.get, el) ? Base.get(el) : iv(el)
         el
     end
+    #! format: on
 end
 
 # ╔═╡ 0cdaa10d-e72a-4b41-8e41-860317ced277
@@ -25,15 +27,19 @@ begin
 	using StatsBase
 	using LaTeXStrings
 	using Distributions
-    using LsqFit
-    using JLD2
-    using Printf
+        using LsqFit
+        using Printf
 	using PrettyTables
 	using PlutoUI
+        using GLM
+        using ATMOStools.CLIMA
 end
 
-# ╔═╡ e19c5b78-95ac-4faf-b0a2-758aad46739a
-using GLM
+# ╔═╡ 3d45676a-8105-4e69-a520-605ee9cca2d1
+using HypothesisTests
+
+# ╔═╡ 7b9dfaec-9bd3-4608-a932-6c7bf2e6f019
+using LinearAlgebra
 
 # ╔═╡ 123e1148-759c-11ed-29d7-e7fc1998111a
 html"""<style>
@@ -51,14 +57,12 @@ md"""
 # ╔═╡ 48c90554-bc23-4e44-a050-4bce892614a2
 # Defining data path
 begin
-	const BASE_PATH = joinpath(homedir(), "LIM/scripts/NSA-ac3-b07/CoupledCloud_Seaice") #"/projekt2/ac3data/B07-data/utqiagvik-nsa/csv_nsa/" #	
-        const LFSIC_PATH = joinpath(BASE_PATH, "data/SIC")
-	const MIPHY_PATH = joinpath(BASE_PATH, "data/csv_mosaic")
+    const BASE_PATH = joinpath(homedir(), "LIM/data/B07/utqiagvik-nsa/csv_nsa")
+    #/scripts/NSA-ac3-b07/CoupledCloud_Seaice")
+    #"/projekt2/ac3data/B07-data/utqiagvik-nsa/csv_nsa/" #	
+    const LFSIC_PATH = joinpath(BASE_PATH, "data/SIC")
+    const MIPHY_PATH = joinpath(BASE_PATH, "data/csv_mosaic")
 end;
-
-# ╔═╡ f40e149b-5bbc-45ed-9262-0b74c52cb19f
-# listing all available SeaIce_winddir files 
-#list_lfsic = readdir(LFSIC_PATH);
 
 # ╔═╡ d734cb56-6da3-4d2f-8bca-a804bba0ba35
 md"""
@@ -67,28 +71,56 @@ md"""
 
 # ╔═╡ 17af9a85-0159-4c0a-b2f7-2dfb5e15bbbb
 md"""
-###### Select wintertime years to load: $(@bind wintertime confirm(Select(["2012-2014", "2012-2022", "2016-2017", "2017-2018", "2012-2013","2018-2019", "2019-2020", "2020-2021"])))
+###### Select wintertime years to load: $(@bind wintertime confirm(Select(["2011-2025", "2012-2024", "2012-2022", "2016-2017", "2017-2018", "2012-2013","2018-2019", "2019-2020", "2020-2021"])))
 """
 
 # ╔═╡ 5e79a910-f5b8-46ff-a5cb-d9204ff54cb6
+md"""
+## Reading the Dataset for the period from $(wintertime)
+#### Defining new variables:
+"""
 
+# ╔═╡ d56e6ef8-24cc-4afc-a155-5d411c3b9422
+DBraw = CSV.read(joinpath(BASE_PATH, "yearly", "all_nsa_microphys_db_$(wintertime).csv"), header=1, skipto=2, DataFrame);
 
 # ╔═╡ e274212a-ef60-4258-930e-32d6d27f1e36
 begin
-    DBraw = CSV.read(joinpath(BASE_PATH, "data", "all_nsa_microphys_db_$(wintertime).csv"), header=1, skipto=2, DataFrame);
     # AOi flagging:
-    DBraw[!, :aoₓ] = let tmp=fill(0, length(DBraw[!, :aoi]))
-        tmp[DBraw[!,:aoi] .< -1] .= -1 #Pa] .≤ 101.0] .= -1 #
-        tmp[DBraw[!,:aoi] .> 1] .= +1 #Pa] .> 102.5] .= +1  #
+    
+    DBraw[!, :ΔZ] = let tmp=fill(NaN32, length(DBraw[!, :Pa]))
+        paₘ = filter(>(0), DBraw.Pa) |> mean
+		taₘ = filter(>(0), DBraw.T2m) |> mean
+        R =  287.05  # [J kg⁻¹ K⁻¹]  Specific gas constant
+        g₀ = 9.83  #[m s⁻²]
+        ΔZ(T, P, Pₘ) = R/g₀*T*log(Pₘ/P)  # [m]
+		
+		T₀ = copy(DBraw.T2m)
+		T₀[isnan.(T₀)] .= taₘ    #@. (DBraw.T2m + (DBraw.Tskin+273.15))/2
+        tmp = @. ΔZ(T₀, DBraw.Pa, 101.32)
+        tmp
+    end  #
+	# L-H system flagging:
+	DBraw[!, :paₓ] = let tmp=fill(0, length(DBraw.ΔZ)) #sign.(DBraw.ΔZ) #
+		#paₘ = filter(!isnan, DBraw.Pa) |> mean
+        tmp[DBraw.ΔZ .≤ 0] .= -1 
+        tmp[DBraw.ΔZ .> 0] .= +1
         tmp
     end
-    # L-H pressure flagging:
-    DBraw[!, :paₓ] = let tmp=fill(0, length(DBraw[!, :aoi]))
-        tmp[DBraw[!,:Pa] .≤ 101.0] .= -1 #
-        tmp[DBraw[!,:Pa] .> 102.5] .= +1  #
-        tmp
-    end
+	
+   # Cloud thinkness [m]:
+   DBraw[!, :δₕ] = (DBraw.cth .- DBraw.clb)
+ 
 end;
+
+# ╔═╡ eb3faf69-cab0-45d7-9484-28ab4963ed9c
+md"""
+### Creating a new DataSet by filtering the main DataSet according to the following constrains:
+* Cloud Top Height < 3.1km
+* rejecting missing data of couple/decouple classification,
+* Ensure that the detected Cloud Base Height is below Cloud Top Height,
+* Extracting data with wind direction from azimuth angles covering land,
+* Setting minimum detectable liquid/ice water path to zero,
+"""
 
 # ╔═╡ 020695a4-61ee-49f5-8e39-4256ca836183
 begin
@@ -96,34 +128,77 @@ begin
     θ₀ = 235e0;
     θ₁ = 110e0;
 
-    DB = let tmp = filter(𝐷->(𝐷.clb < 𝐷.cth) && 𝐷.cth<(3f3) && !ismissing(𝐷.coupled), DBraw) #𝐷.μSIC>(0.0) mwvt>(0)  && 𝐷.μLF>(0.0)
-        disallowmissing!(tmp, :coupled, error=false)
+    DB = let tmp = filter(𝐷-> (𝐷.cth ≤ 3.5f3) && !ismissing(𝐷.coupled), DBraw) #(0< 𝐷.δₕ ≤ 3.5f3)
+        # converting type Missing from :coupled to Bool:
+		disallowmissing!(tmp, :coupled, error=false)
+		
+		# Extracting the data with wind direction between the azimuths covering land:
         filter!(𝐷-> 𝐷.wvtdir≥θ₀ || 𝐷.wvtdir≤θ₁, tmp)
+		
+		# Converting Ice effective radius from m to μm:
         tmp.ier *= 1e6
-	ii = findall((tmp.lwp .< 5) .&& (tmp.iwp .<5))
-	tmp.lwp[ii] .= 0.0
-	tmp.iwp[ii] .= 0.0
-	tmp
+
+		# When Liquid and Ice waterpath is below 5 g m⁻² then is considered 0 (retrieval minimum detection):
+		#ii = findall((tmp.lwp .< 5) .&& (tmp.iwp .<5))
+        ii = findall(tmp.lwp .> 1000 .|| tmp.lwp .< 5)
+        tmp.lwp[ii] .= NaN32 #0.0
+		ii = findall(tmp.iwp .> 1000 .|| tmp.iwp .< 5)
+        tmp.iwp[ii] .= NaN32 #0.0
+			
+		#filter!(d-> 5< d.iwp ≤ 1f3, tmp) # || 5<d.iwp<1f3, tmp)
+		#filter!(d-> 5< d.lwp ≤ 700, tmp)
+		tmp
     end;
-    # SIC bin flagging:
-    SIC_bin = (0:10:105)
+	# Computing Optical thickness τc:
+	DB[:, :τc] = @. 3/2*DB.lwp/DB.der
+	DB[:, :τi] = @. 3/2*DB.iwp/DB.ier/0.917
+	
+	# Categorizing SIC into fixed width bins:
+    SIC_bin = (0:10:100)
 
     DB[!, :sicₓ] = let tmp=fill(NaN, length(DB[!, :μSIC]))
         foreach(zip(SIC_bin[1:end-1], SIC_bin[2:end])) do (xb, xt)
-            ii = findall((DB.μSIC .≥ xb) .&& (DB.μSIC .< xt))
+            ii = findall((DB.μSIC .> xb) .&& (DB.μSIC .≤ xt))
             tmp[ii] .= mean([xb, xt])
         end
         tmp
     end
-    # WINTER flagging
+	
+    # Categorizing data with WINTER fraction, with Nov=0.15, Dec=0.30, Jan=0.45, Feb=0.60, Mar=0.75, Apr=0.90
     jahren = Year.(extrema(DB.date)) |> J->J[1].value:J[2].value  # +1 to include Nov, Dec of last year
-    DB[!, :winter] = let tmp = fill(0, length(DB.date))
+    DB[!, :winter] = let tmp = fill(0f0, length(DB.date))
+		#yb_mo = [Date(mo>4 ? jj : jj+1,mo) for jj in jahren[1:end-1] for mo in (11,12,1,2,3,4)]
+		#yb_fr = Dict(:11=>0, :12=>0.1, :1=>-0.8, :2=>-0.7, :3=>-0.6, :4=>-0.5)
+		#foreach(yb_mo) do Djamo
+		#	ii = findall((DB.date .≥ firstdayofmonth(Djamo) .&& (DB.date .< lastdayofmonth(Djamo)+Day(1)) ))
+		#	tmp[ii] .= year(Djamo) + yb_fr[month(Djamo)]
+		#end
         foreach(zip(jahren[1:end-1], jahren[2:end])) do (yb, yt)
-            ii = findall((DB.date .≥ Date(yb,11,1)) .&& (DB.date .≤ Date(yt,5,1) ) )
+            	ii = findall((DB.date .≥ Date(yb,11,1)) .&& (DB.date .≤ Date(yt,5,1) ) )
             tmp[ii] .= yb
         end
         tmp
     end
+end
+
+# ╔═╡ 3595bf88-4dbf-4c63-90e5-2feae1b78760
+"""
+Function to add ```:winter``` to DataFrame.
+Wintertime is defined as the period from Nov 1st to Apr 30th of following year, and assigned as the Nov year.
+The function requires that the DataFrame has the column ```:date```
+
+```julia> add_winter!(df)```
+"""
+function add_winter!(df::DataFrame)
+	tmp = fill(0f0, length(df.date))
+	jahren = Year.(extrema(df.date)) |> J->J[1].value:J[2].value
+	foreach(zip(jahren[1:end-1], jahren[2:end])) do (yb, yt)
+		ii = findall((df.date .≥ Date(yb,11,1)) .&& (df.date .≤ Date(yt,5,1) ) )
+        tmp[ii] .= yb
+    end
+	idxin = contains.(names(df), "date") |> findfirst
+	insertcols!(df, idxin, :winter => tmp) #df[:, :winter] = tmp
+	return nothing
 end
 
 # ╔═╡ ae59d379-b47d-41fc-8958-4e9e1941b528
@@ -150,18 +225,13 @@ md"""
 begin
 	# SIC threshold to split database:
 	sic₀ = 95
-	# Cloud thinkness [m]:
-	DB[!, :δₕ] = (DB.cth .- DB.clb)
-	# Cloud lapse-rate [K km⁻¹]:
+        # Cloud lapse-rate [K km⁻¹]:
 	DB[!, :Γ] = @. -(DB.cldTT - DB.cldLT)/DB.δₕ/1f-3
 	# Cloud phase fraction:
 	DB[!, :χᵢ] = DB.iwp./(DB.lwp .+ DB.iwp)
 	DB[!, :lf₀] = (DB[!, sicvar] .< sic₀)
 
 end;
-
-# ╔═╡ 0876e2d6-53b1-464d-9feb-48e34df65712
-names(DB)
 
 # ╔═╡ 838b64cb-5719-4a82-94e0-9bd3f5e18598
 md"""
@@ -190,87 +260,128 @@ md"""
 ###### Select only SIC<90 ? $(@bind lf002 confirm(CheckBox(true)))
 """
 
+# ╔═╡ 154f4210-a584-4040-9c03-3c9c51c467bd
+#begin
+#	ΔT = 1
+#	Tin = (-50:ΔT:0)
+#	NT = length(Tin)
+#	CPF = DataFrame(:T=>zeros(2NT), :σT=>zeros(2NT), :μχᵢ=>zeros(2NT), :σχᵢ=>zeros(2NT), :coupled=>zeros(2NT), :N=>zeros(2NT), :Nw=>zeros(2NT), :Ni=>zeros(2NT))
+#	for (i, T) in enumerate(Tin)
+#		T0 = 273.15 + T-1.2ΔT #T + 273.15
+#		T1 = 273.15 + T+1.2ΔT #T + 273.15 + 5
+#		
+#		## DD=filter(R->T0≤R.cldTT<T1 && R.coupled==(true) && (R.lf₀ || ~lf002) && TG[1]≤R.date≤TG[2], DB)
+#		
+#		DD0 = filter(R->T0≤R.cldTT<T1 && (R.lf₀ || ~lf002), DB)  ##  && TG[1]≤R.date≤TG[2]
+#		
+#		# For coupled:
+#		DD = filter(R->R.coupled, DD0) 
+#		CPF[2i-1, :μχᵢ], CPF[2i-1, :σχᵢ] = Nlu(DD.χᵢ, L=0, U=1)
+#		CPF[2i-1, :coupled] = true
+#		CPF[2i-1, :T] = T #mean(DD.cldTT)-273.15 #T
+#		CPF[2i-1, :σT] = std(DD.cldTT) #T
+#		CPF[2i-1, :N] = isempty(DD.χᵢ) || all(isnan.(DD.χᵢ)) ? NaN32 : length(DD.χᵢ)
+#		CPF[2i-1, :Nw] = filter(!isnan, DD.lwp) |> length
+#		CPF[2i-1, :Ni] = filter(!isnan, DD.iwp) |> length
+#
+#		# For decoupled:
+#		DD=filter(R->!R.coupled, DD0)
+#		CPF[2i, :μχᵢ], CPF[2i, :σχᵢ] = Nlu(DD.χᵢ, L=0, U=1)
+#		CPF[2i, :coupled] = false
+#		CPF[2i, :T] = T #mean(DD.cldTT)-273.15 #T
+#		CPF[2i, :σT] = std(DD.cldTT) #T
+#		CPF[2i, :N] = isempty(DD.χᵢ) || all(isnan.(DD.χᵢ)) ? NaN32 : length(DD.χᵢ)
+#		CPF[2i, :Nw] = filter(!isnan, DD.lwp) |> length |> y->2y
+#		CPF[2i, :Ni] = filter(!isnan, DD.iwp) |> length |> y->2y
+#		
+#	end		
+#	
+#end
+
 # ╔═╡ 3af8f75f-0c94-4b4a-af8b-14d90585bd25
 χice(T, β) = @. 0.5(1+tanh(-β[1]*(T-β[2]))) #1-1/(1+exp(.3(-T-25))) #
 
-# ╔═╡ bbc95bb1-a296-4409-93be-ecf3c83c1153
-md"""
-#### Select presure regime: $(@bind aoflag confirm(Select([+1=>"H", -1=>"L"], default=+1)))
-"""
+# ╔═╡ 263c6114-ee34-4da6-8466-5d7bd50dfd03
+#χfit = let tmp = @. !isnan(CPF.μχᵢ) && CPF.coupled==(true)
+#	p0 = [0.18, -15]
+#	curve_fit(χice, CPF.T[tmp], CPF.μχᵢ[tmp], p0)
+#end
 
 # ╔═╡ 3b1bd823-83bb-4630-be82-26b08c90f45a
-begin
-	lfsplt = plot()
-	# Coopman et al. fit:
-	##@df CPF plot!(:T, χice(:T, [0.18, -18]), lw=2, lc=:bone, label="Coopman et al.(2018)")
-	# Fit to coupled data:
-	@df CPF plot!(:T, x->χice(x, χfit.param), lw=2, lc=farben[2], ls=:dash, label="Best fit-model") #[0.09, -25]
-	# Iso-line at -15 C max supersaturation:
-	vline!([-15], ls=:dash, lc=:skyblue, lw=3, label="T = -15 °C")
-	# binned data for decoupled and coupled:
-	@df CPF plot!(:T, :μχᵢ, ribbon=:σχᵢ, lw=0.5, group=:coupled, m=[:^ :o], ms=[5 5], markerstrokewidth=.5, color=farben, fillalpha=.3, xflip=false, xlim=(-51, 1), framestyle=:box, label=["decoupled ± σ" "coupled ± σ"], legend=:bottomleft, xlab="Cloud Top Temperature / °C", ylab="Ice fraction "*L"\chi_{ice}"*" @ AOI $aoflag", guidefontsize=16,legendfontsize=12, tickfontsize=13, minorticks=true, tickdir=:out)
-	# top histogram: Note, when LF->all ylim=(0, 21.2f3) and legend=:toprigth, when LF>0.02 ylim=(0, 2.2f3) and no legend
-	hist_ytick = (lf002 ? (0:1f4:4.5f4) : (0:5f4:25.1f4))
-	hcpf = @df CPF plot(:T, [:Nw :Ni], group=:coupled, l=[:bar :steppre :bar :steppre], ls=:solid, lw=3, lc=[false farben[1] false farben[2]], bar_width=[0.9 0.4 0.4], fillcolor=[farben farben[2]], fillalpha=[0.9 0.7 0.7], xlim=(-51, 1), yscale=:identity, yticks=hist_ytick, yaxis=(formatter=y->@sprintf("%1.1f",1f-3y)), yguidefontsize=12, ytickfontsize=12, ylim=extrema(:Ni).*(1,1.05), xflip=false, xtickfontcolor=:gray, bottom_margins=-8Plots.mm, ylab="# x 10⁴", tickdir=:out, minorticks=true, ann=(-4, hist_ytick[end-1], text(lf002 ? "(b)" : "(a)", 20)), legend=:topleft, background_color_legend=nothing, foreground_color_legend=nothing, label=["2x  liquid (de)" "2x  Ice (de)" "liquid (co)" "Ice (co)"], top_margins=3Plots.mm) #[false :royalblue2 false :orange] [:royalblue2 :orange :orange], ylim=(0, 1.5f4)
-	chifig = plot(hcpf, lfsplt, layout=@layout([a{0.2h}; b]), size=(700, 550), left_margins=3Plots.mm)
+#begin
+#	lfsplt = plot()
+#	# Coopman et al. fit:
+#	##@df CPF plot!(:T, χice(:T, [0.18, -18]), lw=2, lc=:bone, label="Coopman et al.(2018)")
+#	# Fit to coupled data:
+#	@df CPF plot!(:T, x->χice(x, χfit.param), lw=2, lc=farben[2], ls=:dash, label="Best fit-model") #[0.09, -25]
+#	# Iso-line at -15 C max supersaturation:
+#	vline!([-15], ls=:dash, lc=:skyblue, lw=3, label="T = -15 °C")
+#	# binned data for decoupled and coupled:
+#	@df CPF plot!(:T, :μχᵢ, ribbon=:σχᵢ, lw=0.5, group=:coupled, m=[:^ :o], ms=[5 5], markerstrokewidth=.5, color=farben, fillalpha=.3, xflip=false, xlim=(-51, 1), framestyle=:box, label=["decoupled ± σ" "coupled ± σ"], legend=:bottomleft, xlab="Cloud Top Temperature / °C", ylab="Ice fraction "*L"\chi_{ice}"*" @ Z $zflag", guidefontsize=16,legendfontsize=12, tickfontsize=13, minorticks=true, tickdir=:out)
+#	# top histogram: Note, when LF->all ylim=(0, 21.2f3) and legend=:toprigth, when LF>0.02 ylim=(0, 2.2f3) and no legend
+#	hist_ytick = (lf002 ? (0:1f4:4.5f4) : (0:5f4:25.1f4))
+#	hcpf = @df CPF plot(:T, [:Nw :Ni], group=:coupled, l=[:bar :steppre :bar :steppre], ls=:solid, lw=3, lc=[false farben[1] false farben[2]], bar_width=[0.9 0.4 0.4], fillcolor=[farben farben[2]], fillalpha=[0.9 0.7 0.7], xlim=(-51, 1), yscale=:identity, yticks=hist_ytick, yaxis=(formatter=y->@sprintf("%1.1f",1f-3y)), yguidefontsize=12, ytickfontsize=12, ylim=extrema(:Ni).*(1,1.05), xflip=false, xtickfontcolor=:gray, bottom_margins=-8Plots.mm, ylab="# x 10⁴", tickdir=:out, minorticks=true, ann=(-4, hist_ytick[end-1], text(lf002 ? "(b)" : "(a)", 20)), legend=:topleft, background_color_legend=nothing, foreground_color_legend=nothing, label=["2x  liquid (de)" "2x  Ice (de)" "liquid (co)" "Ice (co)"], top_margins=3Plots.mm) #[false :royalblue2 false :orange] [:royalblue2 :orange :orange], ylim=(0, 1.5f4)
+#	chifig = plot(hcpf, lfsplt, layout=@layout([a{0.2h}; b]), size=(700, 550), left_margins=3Plots.mm)
+#
+#	SAVEFIG ? savefig(chifig, "/home/psgarfias/quicklooks/nsa_yearly/$(wintertime)_AOI$(zflag)_Xice.png") : chifig
+#end
 
-	SAVEFIG ? savefig(chifig, "/home/psgarfias/quicklooks/nsa_yearly/$(wintertime)_AOI$(aoflag)_Xice.png") : chifig
-end
+# ╔═╡ bbc95bb1-a296-4409-93be-ecf3c83c1153
+md"""
+#### Select presure regime: $(@bind zflag confirm(Select([-1=>"H", +1=>"L"], default=+1)))
+"""
 
 # ╔═╡ e1f28ccb-e252-4b44-95a3-4ffce7d45455
 begin
-	cbhfig = @df filter(c->!isnan(c.clb) && c.aoₓ==aoflag, DB) density(:clb, group=(:lf₀, :coupled), trim=true, color=farben, label=hinweistext, linealpha=[.7 .7 1 1], l=[:dash :dash :solid :solid], lw=[2 2 4 4], xlabel="Cloud liquid base height / m", xlim=(1f2, 6f3), xscale=:log10, xticks=([10,10^2,10^3,10^4], ["10¹","10²","10³","10⁴"]), ylabel="PDF @ AOI $aoflag", ylim=(0, .005), frame_style=:box, tickdir=:out, minorticks=true, tickfontsize=13, guidefontsize=15, legend=:topright, legendfontsize=15, size=(500,500), right_margin=2Plots.mm , fillalpha=0.4)
+	cbhfig = @df filter(c->!isnan(c.clb), DB) density(:clb, group=(:lf₀, :coupled), trim=true, color=farben, label=hinweistext, linealpha=[.7 .7 1 1], l=[:dash :dash :solid :solid], lw=[2 2 4 4], xlabel="Cloud liquid base height / m", xlim=(1f2, 6f3), xscale=:log10, xticks=([10,10^2,10^3,10^4], ["10¹","10²","10³","10⁴"]), ylabel="PDF @ Z $zflag", ylim=(0, .005), frame_style=:box, tickdir=:out, minorticks=true, tickfontsize=13, guidefontsize=15, legend=:topright, legendfontsize=15, size=(500,500), right_margin=2Plots.mm , fillalpha=0.4)
 	
-	SAVEFIG ? savefig(cbhfig, "/home/psgarfias/quicklooks/nsa_yearly/$(wintertime)_AOI$(aoflag)_CBH.png") : cbhfig
+	SAVEFIG ? savefig(cbhfig, "/home/psgarfias/quicklooks/nsa_yearly/$(wintertime)_AOI$(zflag)_CBH.png") : cbhfig
 end
 
 # ╔═╡ 5c9a28aa-5145-4a70-bc0e-5c299d3ae829
 begin
-	cdpfig = @df filter(c->c.δₕ>(0) && c.aoₓ==aoflag, DB) density(:δₕ, group=(:lf₀, :coupled), trim=true, color=farben, label=hinweistext, linealpha=[.7 .7 1 1], l=[:dash :dash :solid :solid], lw=[2 2 4 4], xlabel="Cloud depth / m", xlim=(30, 1.1f4), xscale=:log10, xticks=([10^2,10^3,10^4], ["10²","10³","10⁴"]), ylabel="PDF @ AOI $aoflag", ylim=(0, .006), frame_style=:box, tickdir=:out, minorticks=true, tickfontsize=13, guidefontsize=15, legend=:topright, legendfontsize=15, size=(500,500), right_margin=2Plots.mm , fillalpha=0.4)
-	SAVEFIG ? savefig(cdpfig, "/home/psgarfias/quicklooks/nsa_yearly/$(wintertime)_AOI$(aoflag)_CDP.png") : cdpfig
+	cdpfig = @df filter(c->c.δₕ>(0), DB) density(:δₕ, group=(:lf₀, :coupled), trim=true, color=farben, label=hinweistext, linealpha=[.7 .7 1 1], l=[:dash :dash :solid :solid], lw=[2 2 4 4], xlabel="Cloud depth / m", xlim=(30, 1.1f4), xscale=:log10, xticks=([10^2,10^3,10^4], ["10²","10³","10⁴"]), ylabel="PDF @ Z $zflag", ylim=(0, .006), frame_style=:box, tickdir=:out, minorticks=true, tickfontsize=13, guidefontsize=15, legend=:topright, legendfontsize=15, size=(500,500), right_margin=2Plots.mm , fillalpha=0.4)
+	SAVEFIG ? savefig(cdpfig, "/home/psgarfias/quicklooks/nsa_yearly/$(wintertime)_AOI$(zflag)_CDP.png") : cdpfig
 end
 
 # ╔═╡ 6992ff1a-2c1c-44b0-854d-b260a26909c8
 begin
-	ctt_plt = @df filter(c->c.aoₓ==aoflag, DB) density((:cldTT).-273.15, group=(:lf₀, :coupled), label=hinweistext, lc=farben, linealpha=[.7 .7 1 1], l=[:dash :dash :solid :solid], xlim=(-65, 3), xlabel="Cloud top temperature / °C", ylabel="PDF @ AOI $aoflag", trim=false, lw=[2 2 4 4], frame_style=:box, tickdir=:out,  minorticks=true, tickfontsize=13, guidefontsize=15, legendfontsize=12, size=(500,500), legend=:topleft)
-	SAVEFIG ? savefig(ctt_plt, "/home/psgarfias/quicklooks/nsa_yearly/$(wintertime)_AOI$(aoflag)_CTT.png") : ctt_plt
+	ctt_plt = @df DB density((:cldTT).-273.15, group=(:lf₀, :coupled), label=hinweistext, lc=farben, linealpha=[.7 .7 1 1], l=[:dash :dash :solid :solid], xlim=(-65, 3), xlabel="Cloud top temperature / °C", ylabel="PDF @ Z $zflag", trim=false, lw=[2 2 4 4], frame_style=:box, tickdir=:out,  minorticks=true, tickfontsize=13, guidefontsize=15, legendfontsize=12, size=(500,500), legend=:topleft)
+	SAVEFIG ? savefig(ctt_plt, "/home/psgarfias/quicklooks/nsa_yearly/$(wintertime)_AOI$(zflag)_CTT.png") : ctt_plt
 end
 
 # ╔═╡ d2accbb3-87d7-484c-82f1-ab6b488b653c
 begin
-	lprfig = @df filter(c->!isnan(c.lpr) && c.aoₓ==aoflag, DB) density(:lpr, group=(:lf₀, :coupled), label=hinweistext, lc=farben, linealpha=[.7 .7 1 1], l=[:dash :dash :solid :solid], lw=[2 2 4 4], xlim=(-30, 15), xlabel=L"\Gamma_\textrm{cloud}=-\frac{dT}{dh}\,~/~\,\textrm{°C~km^{-1}}", ylabel="PDF @ AOI $aoflag", ylim=(-0.002, 0.18), trim=true, frame_style=:box, tickdir=:out, minorticks=true, tickfontsize=13, guidefontsize=15, legendfontsize=15, size=(500,500), legend=:topleft); vline!([6.0],ls=:dash, lw=2, la=0.8, lc=:black, label=L"~\Gamma_\textrm{m}=6~\textrm{K~km^{-1}}")
+	lprfig = @df filter(c->!isnan(c.lpr), DB) density(:lpr, group=(:lf₀, :coupled), label=hinweistext, lc=farben, linealpha=[.7 .7 1 1], l=[:dash :dash :solid :solid], lw=[2 2 4 4], xlim=(-30, 15), xlabel=L"\Gamma_\textrm{cloud}=-\frac{dT}{dh}\,~/~\,\textrm{°C~km^{-1}}", ylabel="PDF @ Z $zflag", ylim=(-0.002, 0.18), trim=true, frame_style=:box, tickdir=:out, minorticks=true, tickfontsize=13, guidefontsize=15, legendfontsize=15, size=(500,500), legend=:topleft); vline!([6.0],ls=:dash, lw=2, la=0.8, lc=:black, label=L"~\Gamma_\textrm{m}=6~\textrm{K~km^{-1}}")
 	
-	SAVEFIG ? savefig(lprfig, "/home/psgarfias/quicklooks/nsa_yearly/$(wintertime)_AOI$(aoflag)_LPR.png") : lprfig
+	SAVEFIG ? savefig(lprfig, "/home/psgarfias/quicklooks/nsa_yearly/$(wintertime)_AOI$(zflag)_LPR.png") : lprfig
 end
 
 # ╔═╡ f99cdbfe-2d31-483f-b1a2-664ddffd95f3
 begin
-	sktfig = @df filter(c->!isnan(c.Tskin) && c.aoₓ==aoflag, DB) density(:Tskin, group=(:lf₀, :coupled), label=hinweistext, lc=farben, linealpha=[.7 .7 1 1], l=[:dash :dash :solid :solid], lw=[2 2 4 4], xlim=(-50, 1.5), xlabel="Surface skin Temperature / °C", ylabel="PDF @ AOI $aoflag", ylim=(-0.002, 0.15), trim=false, frame_style=:box, tickdir=:out, minorticks=true, tickfontsize=13, guidefontsize=15, legendfontsize=15, size=(500,500), legend=:topleft) # vline!
+	sktfig = @df filter(c->!isnan(c.Tskin), DB) density(:Tskin .- 273.15, group=(:lf₀, :coupled), label=hinweistext, lc=farben, linealpha=[.7 .7 1 1], l=[:dash :dash :solid :solid], lw=[2 2 4 4], xlim=(-50, 1.5), xlabel="Surface skin Temperature / °C", ylabel="PDF @ Z $zflag", ylim=(-0.002, 0.15), trim=false, frame_style=:box, tickdir=:out, minorticks=true, tickfontsize=13, guidefontsize=15, legendfontsize=15, size=(500,500), legend=:topleft) # vline!
 	
-	SAVEFIG ? savefig(sktfig, "/home/psgarfias/quicklooks/nsa_yearly/$(wintertime)_AOI$(aoflag)_SKT.png") : sktfig
+	SAVEFIG ? savefig(sktfig, "/home/psgarfias/quicklooks/nsa_yearly/$(wintertime)_AOI$(zflag)_SKT.png") : sktfig
 end
 
 # ╔═╡ 3473d761-f57f-4d3f-beba-a8a516041da5
 begin
-	reff_plt = @df filter(c->1<c.der<150 && c.aoₓ==aoflag, DB) density(:der, group=(:lf₀, :coupled), label=hinweistext, lc=farben, linealpha=[.7 .7 1 1], l=[:dash :dash :solid :solid], xlim=(0, 60), xlabel=L"\mathrm{Liquid}~~\overline{r}_{eff}~ /~~\mathrm{\mu~m}", ylabel="PDF @ AOI $aoflag", trim=false, lw=[2 2 4 4], frame_style=:box, tickdir=:out,  minorticks=true, tickfontsize=13, guidefontsize=15, legendfontsize=12, size=(500,500), legend=:topright)
+	reff_plt = @df filter(c->1<c.der<150, DB) density(:der, group=(:lf₀, :coupled), label=hinweistext, lc=farben, linealpha=[.7 .7 1 1], l=[:dash :dash :solid :solid], xlim=(0, 60), xlabel=L"\mathrm{Liquid}~~\overline{r}_{eff}~ /~~\mathrm{\mu~m}", ylabel="PDF @ Z $zflag", trim=false, lw=[2 2 4 4], frame_style=:box, tickdir=:out,  minorticks=true, tickfontsize=13, guidefontsize=15, legendfontsize=12, size=(500,500), legend=:topright)
 	#savefig(reff_plt, "/home/psgarfias/quicklooks/nsa_yearly/$(wintertime)_AOI$(aoflag)_DEF.png")
 end
 
 # ╔═╡ 07d4b3f0-d37e-4b5a-ae8f-46033e57b112
 begin
-	ieff_plt = @df filter(c->1<c.ier<150 && c.aoₓ==aoflag, DB) density(:ier, group=(:lf₀, :coupled), label=hinweistext, lc=farben, linealpha=[.7 .7 1 1], l=[:dash :dash :solid :solid], xlim=(0, 70), xlabel=L"\mathrm{Ice}~~\overline{r}_{eff}~ /~~\mathrm{\mu~m}", ylabel="PDF @ AOI $aoflag", trim=false, lw=[2 2 4 4], frame_style=:box, tickdir=:out,  minorticks=true, tickfontsize=13, guidefontsize=15, legendfontsize=12, size=(500,500), legend=:topleft)
-	#savefig(ieff_plt, "/home/psgarfias/quicklooks/nsa_yearly/$(wintertime)_AOI$(aoflag)_IEF.png")
+	ieff_plt = @df filter(c->1<c.ier<150, DB) density(:ier, group=(:lf₀, :coupled), label=hinweistext, lc=farben, linealpha=[.7 .7 1 1], l=[:dash :dash :solid :solid], xlim=(0, 70), xlabel=L"\mathrm{Ice}~~\overline{r}_{eff}~ /~~\mathrm{\mu~m}", ylabel="PDF @ Z $zflag", trim=false, lw=[2 2 4 4], frame_style=:box, tickdir=:out,  minorticks=true, tickfontsize=13, guidefontsize=15, legendfontsize=12, size=(500,500), legend=:topleft)
+	#savefig(ieff_plt, "/home/psgarfias/quicklooks/nsa_yearly/$(wintertime)_AOI$(zflag)_IEF.png")
 end
 
 # ╔═╡ 76c14688-0be1-43a5-932e-352ebac308b4
 begin
-	aoifig = @df DB density(:aoi, group=(:lf₀, :coupled), bandwidth=0.5, label=hinweistext, lc=farben, linealpha=[.7 .7 1 1], l=[:dash :dash :solid :solid], xlim=(-5.2, 5.2), xlabel="AO index", ylabel="PDF", trim=true, lw=[2 2 4 4], frame_style=:box, tickdir=:out,  minorticks=true, tickfontsize=13, guidefontsize=15, legendfontsize=12, size=(650,300), legend=:outerright, left_margins=3Plots.mm, bottom_margins=3Plots.mm)
-	vline!([-1 1], ls=:dash, la=0.5, lc=:black, label="")
+	aoifig = @df filter(d->!isnan(d.ΔZ), DB) density(:ΔZ, group=(:lf₀, :coupled), bandwidth=3.5, label=hinweistext, lc=farben, linealpha=[.7 .7 1 1], l=[:dash :dash :solid :solid], xlim=(-350, 350), xlabel="ΔZ [m]", ylabel="PDF", trim=true, lw=[2 2 4 4], frame_style=:box, tickdir=:out,  minorticks=true, tickfontsize=13, guidefontsize=15, legendfontsize=12, size=(650,300), legend=:outerright, left_margins=3Plots.mm, bottom_margins=3Plots.mm)
+	vline!([15.9], ls=:dash, la=0.5, lc=:black, label="")
 	#savefig(aoifig, "/home/psgarfias/quicklooks/nsa_yearly/$(wintertime)_AOI.png")
 end
-
-# ╔═╡ 700b9f2a-1e4d-4d30-a57e-06f067d2db93
-typeof(DB.ier)
 
 # ╔═╡ 6b11b88f-66e4-4630-a9a0-bc479cda43e1
 # Collecting the data into fixed bin sets for LF and SIC:
@@ -278,7 +389,7 @@ begin
 	## δlf = 0.02
 	## lf_bin = range(δlf, step=δlf, stop=.5) |> collect
 	## Nbins = length(lf_bin)
-	δsic = 5 #mean(diff(sic_bin))
+	δsic = 10 #mean(diff(sic_bin))
     sic_bin = range(δsic, step=δsic, stop=100) |> collect
     Nbins = length(sic_bin)
 	lwp_bin = fill(NaN32, Nbins,2)
@@ -287,92 +398,82 @@ begin
 	#sic_edg = sic_bin .- diff(sic_bin)[1]; push!(sic_edg, 101)
 end;
 
+# ╔═╡ bf4bc3ca-2137-45bc-a8fa-5e43594c366c
+range(0, step=10, stop=100) |> collect
+
 # ╔═╡ ac217227-a672-4f9c-80ff-277c57e473f9
-# defining math funxtion for truncated distribution
-function Nlu(x::AbstractVector; L=0, U=nothing)
+"""
+Function to compute average of vector following a given statisitcs methods:
+USAGE:
+```julia-repl
+julia> μ, σ = Nlu(X; stats=:median)
+julia> μ, σ = Nlu(X; L=0, U=100, stats=:truncate)
+```
+WHERE:
+* ```X::AbstractVector``` containig the data to average,
+* ```stats::Symbol``` (Optional) which method to use: ```:median```, ```:aritmetic```, ```:geometric```, ```:q25```, ```:q75```, ```:truncate``` (default),
+* ```L::Real``` and ```U::Real``` are the lower and upper limits for the tats=:truncate methodt (default ```L=0```, ```U=nothing```)
+OUTPUT:
+* ```μ::Real``` The mean, median, 25th or 75th quantile determined by the option ```stats```,
+* ```σ::Real``` The standard deviation, or MAD. for quantiles NaN is returned, for ```:geometric (μ-σₗ, σₕ-μ)``` is returned.
+"""
+function Nlu(x::AbstractVector; L=0, U=nothing, stats=:truncate)
 
-	x = filter(>(0), x)
-	isempty(x) && return NaN32, 0
-	#μₗₙ, σₗₙ = mean(x), var(x)
-	𝑓 = fit_mle(Normal, x)
-	μ = mean(𝑓) #exp(μₗₙ + 0.5σₗₙ) #
-	σ = std(𝑓) #μ*sqrt(exp(σₗₙ) - 1) #
-	qq = quantile(𝑓, [.25, .5, .75])
-	#return qq[2], 0.5(qq[1]+qq[2])
-	#return μ, σ
+	x = filter(!isnan, x)
+	if isempty(x) && 
+            return NaN32, ifelse(stats==:geometric, (0,0), 0)
+	end
 	
-	𝑁 = 𝑓 # !isnan(σ) ? Normal(μ, σ) : Normal(μ, 0)
+	qq = quantile(x, [.25, .5, .75])
 	
-	𝑆 = if isnothing(U)
-        truncated(𝑁, lower=L)
-    elseif L<U
-        truncated(𝑁, lower=L, upper=U)
-    else
-        @error "L must be lower than U, but given $L ≥ $U"
-    end
-	
-	return mean(𝑆), std(𝑆)
+	if stats==:aritmetic
+		μ = mean(x)
+		σ = std(x)
+		return μ, σ	
+	elseif stats==:median
+		
+		mad = median(abs.(qq[2] .- x))
+		return qq[2], mad  #(qq[1], qq[3]) #
+	elseif stats==:q25
+		return qq[1], NaN
+	elseif stats==:q75
+		return qq[3], NaN
+	elseif stats==:truncate
+		filter!(≥(L), x) 
+		𝑁 = fit_mle(Normal, x)
+		𝑆 = if isnothing(U)
+        	truncated(𝑁, lower=L)
+    	elseif L<U
+        	truncated(𝑁, lower=L, upper=U)
+    	else
+        	@error "L must be lower than U, but given $L ≥ $U"
+    	end
+		return mean(𝑆), std(𝑆)
+		
+	elseif stats==:geometric
+		filter!(>(0), x) 
+		X = @. log(x)
+		μ = (exp∘mean)(X)
+		Xμ = @. (X - μ)^2  # log(x/μ)
+		σ = (exp∘std)(X)
+		σₗ = μ/σ
+		σₕ = μ*σ
+		return μ, (μ-σₗ, σₕ-μ)
+	else
+		@error "optional argument stats=$(stats) not recognized!"
+	end
 end
 
-# ╔═╡ 154f4210-a584-4040-9c03-3c9c51c467bd
-begin
-	ΔT = 1
-	Tin = (-50:ΔT:0)
-	NT = length(Tin)
-	CPF = DataFrame(:T=>zeros(2NT), :σT=>zeros(2NT), :μχᵢ=>zeros(2NT), :σχᵢ=>zeros(2NT), :coupled=>zeros(2NT), :N=>zeros(2NT), :Nw=>zeros(2NT), :Ni=>zeros(2NT))
-	for (i, T) in enumerate(Tin)
-		T0 = 273.15 + T-1.2ΔT #T + 273.15
-		T1 = 273.15 + T+1.2ΔT #T + 273.15 + 5
-		
-		## DD=filter(R->T0≤R.cldTT<T1 && R.coupled==(true) && (R.lf₀ || ~lf002) && TG[1]≤R.date≤TG[2], DB)
-		
-		DD0 = filter(R->T0≤R.cldTT<T1 && (R.lf₀ || ~lf002) && R.aoₓ==aoflag, DB)  ##  && TG[1]≤R.date≤TG[2]
-		
-		# For coupled:
-		DD = filter(R->R.coupled, DD0) 
-		CPF[2i-1, :μχᵢ], CPF[2i-1, :σχᵢ] = Nlu(DD.χᵢ, L=0, U=1)
-		CPF[2i-1, :coupled] = true
-		CPF[2i-1, :T] = T #mean(DD.cldTT)-273.15 #T
-		CPF[2i-1, :σT] = std(DD.cldTT) #T
-		CPF[2i-1, :N] = isempty(DD.χᵢ) || all(isnan.(DD.χᵢ)) ? NaN32 : length(DD.χᵢ)
-		CPF[2i-1, :Nw] = filter(!isnan, DD.lwp) |> length
-		CPF[2i-1, :Ni] = filter(!isnan, DD.iwp) |> length
-
-		# For decoupled:
-		DD=filter(R->!R.coupled, DD0)
-		CPF[2i, :μχᵢ], CPF[2i, :σχᵢ] = Nlu(DD.χᵢ, L=0, U=1)
-		CPF[2i, :coupled] = false
-		CPF[2i, :T] = T #mean(DD.cldTT)-273.15 #T
-		CPF[2i, :σT] = std(DD.cldTT) #T
-		CPF[2i, :N] = isempty(DD.χᵢ) || all(isnan.(DD.χᵢ)) ? NaN32 : length(DD.χᵢ)
-		CPF[2i, :Nw] = filter(!isnan, DD.lwp) |> length |> y->2y
-		CPF[2i, :Ni] = filter(!isnan, DD.iwp) |> length |> y->2y
-		
-	end		
+# ╔═╡ 49caf4c1-1ca2-483e-bfa7-36b98f3589be
+combine(groupby(DB, :winter)) do df
+	var=:lwp
+	μ, σ = Nlu(df[:, var], stats=:aritmetic)
+	u, s = Nlu(df[:, var], stats=:truncate)
+	g, h = Nlu(df[:, var], stats=:geometric)
+	med, mad = Nlu(df[:, var], stats=:median) #filter(>(0), df.lwp) |> x->(median(x), median(abs.(x .- median(x))))
+	(ave = μ, sig = σ, tru = u, tsd = s, med=med, mad=mad, ged=g, gsd=h)
+end |> df-> @df df scatter(:winter .+[0 .1 .2 .3], [:ave :tru :med :ged], yerror=[:sig :tsd :mad :gsd])#, xflip=true)
 	
-end
-
-# ╔═╡ 263c6114-ee34-4da6-8466-5d7bd50dfd03
-χfit = let tmp = @. !isnan(CPF.μχᵢ) && CPF.coupled==(true)
-	p0 = [0.18, -15]
-	curve_fit(χice, CPF.T[tmp], CPF.μχᵢ[tmp], p0)
-end
-
-# ╔═╡ 4da11521-ba51-406a-ae1e-02d9355fbc29
-χfit.param
-
-# ╔═╡ 5a356040-ef21-412f-a129-1723dd1608c7
-# defining math function for geometrical mean:
-function Glu(x::AbstractVector)
-	x = filter(>(0), x)
-	X = @. log(x)
-	μ = exp(mean(X))
-	σ = exp(sqrt(mean((log.(x./μ)).^2)))
-	return μ, σ
-end
-
-# ╔═╡ 54e2dd01-1682-4f5d-ac35-35dd3cc084c9
-Nlu(DB[!,:iwp]), Glu(DB[!,:iwp]), filter(>(0), DB.iwp) |> x->(mean(x), std(x))
 
 # ╔═╡ 8e883748-effd-4898-b6ea-24de538fc5e8
 filter(V-> V.coupled==(true), DB) |> F->length(findall(<(10), F.decoH))/length(F.decoH)
@@ -383,150 +484,279 @@ fσₑᵣ(x) = sqrt(mean(x.^2)/length(x))
 # ╔═╡ 264627a8-4975-4b75-b4de-136d9861aa0e
 begin
     # CLOUD Variables to consider
-    VARIN = [:lwp, :iwp, :der, :ier]
+    #VARIN = [:lwp, :iwp, :der, :ier, :δₕ, :Γ, :χᵢ, :cldTT]
 
     # auxiliary function to count number of data without NaN:
     Zahlen(N) = filter(!isnan, N) |> length
 
 	# range of acceptable values for variables:
-	var_lim = Dict(:lwp=>(0, 1500), :iwp=>(0, 2000), :der=>(1, 150), :ier=>(1, 150))
+	var_lim = Dict(
+			:lwp=>(lim=(0, 1000), stats=:median),
+			:iwp=>(lim=(0, 4000), stats=:median),
+			:der=>(lim=(0, 150), stats=:median),
+			:ier=>(lim=(0, 150), stats=:median),
+			:δₕ=>(lim=(0,3.5f3), stats=:aritmetic),
+			:Γ=>(lim=(-40,40), stats=:aritmetic),
+			:χᵢ=>(lim=(-0.1,1.1), stats=:truncate),
+			:cldTT=>(lim=(0, 300), stats=:aritmetic),
+			:clb=>(lim=(0, 3.5f3), stats=:aritmetic),
+			:τc=>(lim=(0, 500), stats=:median),
+			:τi=>(lim=(0, 500), stats=:median)
+	)
+
+	VARIN = keys(var_lim)
 	# auxiliary function to select variable within acceptable limits:
-	within(V; lims=(0, Inf)) = lims[1] ≤ V < lims[2]
-	
+	within(V; lims=(0, Inf)) = ifelse(lims[1]<0, lims[1] ≤ V ≤ lims[2], lims[1] < V ≤ lims[2])
+
 	dat = let tmp = Dict()
-        tmp[:de] = Dict(Symbol(x,y)=>fill(NaN32, Nbins) for x in [:μSIC, :σSIC] for y in VARIN) |> DataFrame
-		tmp[:co] = Dict(Symbol(x,y)=>fill(NaN32, Nbins) for x in [:μSIC, :σSIC] for y in VARIN) |> DataFrame
-		## tmp[:de].NNlf = fill(0, Nbins)
-		## tmp[:co].NNlf = fill(0, Nbins)
-		tmp[:de].NNsic = fill(0, Nbins)
-		tmp[:co].NNsic = fill(0, Nbins)
-		tmp[:de].coupled = fill(false, Nbins)
-		tmp[:co].coupled = fill(true, Nbins)
-		## tmp[:de][!, :lf_bin] = lf_bin
-		## tmp[:co][!, :lf_bin] = lf_bin
-		tmp[:de][!, :sic_bin] = sic_bin
-		tmp[:co][!, :sic_bin] = sic_bin
-		## tmp[:de][!, :lf_var] = fill(NaN32, Nbins)
-		## tmp[:co][!, :lf_var] = fill(NaN32, Nbins)
-		tmp[:de][!, :sic_var] = fill(NaN32, Nbins)
-		tmp[:co][!, :sic_var] = fill(NaN32, Nbins)
-		#sigsym = replace(String(x), "μ"=>"σ") |> Symbol
+		# considering flag of H/L pressure?
+		δZ = (-1,1)
+		xNbins = length(δZ)*Nbins
+
+		# Initializing variables:
+        tmp[:de] = Dict(Symbol(x,y)=>fill(var_lim[y].stats==:geometric && x==:σ ? (0f0, 0f0) : NaN32, xNbins) for x in [:μ, :σ] for y in VARIN) |> DataFrame
+		tmp[:co] = Dict(Symbol(x,y)=>fill(var_lim[y].stats==:geometric && x==:σ ? (0f0, 0f0) : NaN32, xNbins) for x in [:μ, :σ] for y in VARIN) |> DataFrame
+		
+		tmp[:de].NNsic = fill(0, xNbins)
+		tmp[:co].NNsic = fill(0, xNbins)
+		tmp[:de].coupled = fill(false, xNbins)
+		tmp[:co].coupled = fill(true, xNbins)
+		
+		tmp[:de][!, :sic_bin] = [sic_bin..., sic_bin...].-3
+		tmp[:co][!, :sic_bin] = [sic_bin..., sic_bin...]
+		
+		tmp[:de][!, :sic_var] = fill(NaN32, xNbins)
+		tmp[:co][!, :sic_var] = fill(NaN32, xNbins)
+
+		# pressure flag:
+		tmp[:de][!, :Δz] = [fill(δZ[1], Nbins)..., fill(δZ[2], Nbins)...]
+		tmp[:co][!, :Δz] = [fill(δZ[1], Nbins)..., fill(δZ[2], Nbins)...]
+		
+		for z in δZ
+			
 		for y in VARIN
+			
 			for i in 1:Nbins
-				## lf_edg0 = lf_bin[i] - 1.2δlf
-				## lf_edg1 = lf_bin[i] + 1.2δlf
-				# filling with LWP (decoupled):
-				## tmp[:de][i,Symbol(:μLF,y)], tmp[:de][i,Symbol(:σLF,y)], tmp[:de][i, :lf_var], tmp[:de][i, :NNlf] = let
-				## 	F = filter(V->(lf_edg0 .≤ V.μLF .< lf_edg1) .&& (V.coupled==(false)), DB)
-				##  	isempty(F) ? (NaN32, NaN32, NaN32,0) : (Nlu(eval(:($F.$y)))..., fσₑᵣ(F.σLF), Zahlen(F.μLF) )
-				## end
-				
-				
-				# filling with LWP (coupled):
-				## tmp[:co][i,Symbol(:μLF,y)], tmp[:co][i,Symbol(:σLF,y)], tmp[:co][i, :lf_var], tmp[:co][i, :NNlf] = let
-				## 	F = filter(V->(lf_edg0 .≤ V.μLF .< lf_edg1) .&& (V.coupled==(true)), DB)
-				##  	isempty(F) ? (NaN32, NaN32, NaN32,0) : (Nlu(eval(:($F.$y)))..., fσₑᵣ(F.σLF), Zahlen(F.μLF) )
-				## 	 #mean(eval(:($F.$y))), std(eval(:($F.$y))), mean((F.σLF).^2) )
-				## end
+
+				idx = i + (z==1 ? Nbins : 0)
+				isym = Symbol(:μ, y)
+				ssym = Symbol(:σ, y)
 				# ---
 				#### sic_edg0 = sic_bin[i] - 0.75δsic
 				#### sic_edg1 = sic_bin[i] + 0.75δsic
-				sic_edgs = (sic_bin[i] - δsic, sic_bin[i] + δsic)   # -/+ 0.75
-				# filling with IWP (decoupled):
-				tmp[:de][i,Symbol(:μSIC,y)], tmp[:de][i,Symbol(:σSIC,y)], tmp[:de][i, :sic_var], tmp[:de][i, :NNsic] = let
-					F = filter(V->within.(V[sicvar], lims=sic_edgs) .&& within.(V[y], lims=var_lim[y]) .&& (V.coupled==(false)) && V.aoₓ==aoflag, DB)
-					isempty(F) ? (NaN32, NaN32, NaN32,0) : (Nlu(eval(:($F.$y)))..., fσₑᵣ(F.σSIC), Zahlen(F.μSIC) )
+				sic_edgs = (max(4, sic_bin[i] - δsic), sic_bin[i])   # -/+ 0.75
+				
+				# filling with variables (decoupled):
+				
+				tmp[:de][idx, isym], tmp[:de][idx, ssym], tmp[:de][idx, :sic_var], tmp[:de][idx, :NNsic] = let
+					F = filter(V->within.(V[sicvar], lims=sic_edgs) .&& within.(V[y], lims=var_lim[y].lim) .&& (V.coupled==(false) .&& V.paₓ==(z)), DB)
+					Nlu(eval(:($F.$y)); stats=var_lim[y].stats)..., fσₑᵣ(F.σSIC), Zahlen(F.μSIC)
 				end
-				# filling with IWP (coupled):
-				tmp[:co][i,Symbol(:μSIC,y)], tmp[:co][i,Symbol(:σSIC,y)], tmp[:co][i, :sic_var], tmp[:co][i, :NNsic] = let
-					F = filter(V->within.(V[sicvar], lims=sic_edgs) .&& within.(V[y], lims=var_lim[y]) .&& (V.coupled==(true)) && V.aoₓ==aoflag, DB)
-					isempty(F) ? (NaN32, NaN32, NaN32, 0) : (Nlu(eval(:($F.$y)))..., fσₑᵣ(F.σSIC), Zahlen(F.μSIC) )
+				# filling with variables (coupled):
+				tmp[:co][idx, isym], tmp[:co][idx, ssym], tmp[:co][idx, :sic_var], tmp[:co][idx, :NNsic] = let
+					F = filter(V->within.(V[sicvar], lims=sic_edgs) .&& within.(V[y], lims=var_lim[y].lim) .&& (V.coupled==(true)) .&& V.paₓ==(z), DB)
+					Nlu(eval(:($F.$y)); stats=var_lim[y].stats)..., fσₑᵣ(F.σSIC), Zahlen(F.μSIC)
 				end
 				#
 			end
 		end
-	vcat(tmp[:de], tmp[:co])
+		end  # over z var
+	vcat(tmp[:de], tmp[:co]) |> df->groupby(df, :Δz)
 	end
-end
+end;
 
 # ╔═╡ 75609282-c67c-4794-a68b-94d32c004783
 md"""
 ### Fitting data as function of SIC
-`` f_i(SIC) = β_0\,SIC^{β_1}``
+`` f_s(SIC) = β_1 - β_2\exp[sic^2]``
 
-where ``f_i \in \{\mathrm{lwp},~ \mathrm{iwp},~ r_{eff} \}``
+where ``f_s \in \{\mathrm{lwp},~ \mathrm{iwp},~ r_{eff} \}`` and ``sic \in \{0, \dots, 1\}``
 """
 
 # ╔═╡ 46c4e7cd-7d8a-49b7-abdd-1347692dcfd8
 begin
 	fᵢ(X, β) = @. β[1]*X^β[2]
-	fₛ(X, β; X0=100) = @. β[1]*(X/X0)^β[2]
+    fₛ(X, β; X0=100) = @. β[1] + β[2]*exp((X/X0)^2) #exp((X/X0)^2) #- β[2]*exp((X/X0)^2 - 1) # 
+    fᵧ(X, β; X0=100) = @. β[1] - β[2]*exp((X/X0)^2 -1) #(X/X0)^β[3] #
+end
+
+# ╔═╡ acad36c9-c463-47c2-9277-efea563847df
+filter(d->!isnan(d.sicₓ), DB) |> df->groupby(df, [:sicₓ, :paₓ, :coupled]) |> gf->combine(gf) do d
+	
+	Dict([:μclb, :σclb] .=> Nlu(d.clb)) |> DataFrame
 end
 
 # ╔═╡ d04fad13-2fe2-4fa2-8528-24de8dafbbad
-rfit, R², Δβ = let VARICE = [:μSIC]  ## :μLF, 
+rfit, R², Chi², Δβ = let ice = :μ,  ## :μLF, 
     tmp = Dict()
 	r2 = Dict()
+	chi2 = Dict()
 	con = Dict()
-        foreach(Dict(:co=>true, :de=>false)) do (i, co_status)
-	Y=filter(D->D.coupled==(co_status), dat) #tmp[:co].μLFlwp
+    foreach(Dict(:co=>true, :de=>false)) do (i, co_status)
 		
         r2[i] = Dict()
+		chi2[i] = Dict()
         tmp[i] = Dict()
         con[i] = Dict()
 
-	foreach(VARICE) do ice
-		foreach(VARIN) do S
-			var = Symbol(ice, S)
+		foreach((-1,1)) do varz
+			Δz = varz==-1 ? Symbol("H") : Symbol("L")
+			r2[i][Δz] = Dict()
+			chi2[i][Δz] = Dict()
+			tmp[i][Δz] = Dict()
+			con[i][Δz] = Dict()
 
-			err = replace(String(var), "μ"=>"σ") |> Symbol
-			NNice = replace(lowercase(String(ice)), "μ"=>"NN") |> Symbol
-			println(var)
-			## jj = (Y[!, :lf_bin].>0.02) #: (Y[!, :sic_bin].>85) #NNice] > 10) #(Y[!, :lf_bin] > 0.05)
-			ii = @. !isnan(Y[!, var]) #&& (Y[!, NNice]>10) && jj
-			Yin = Y[ii, var]
-			Xin = ice==:μLF ? Y.lf_bin[ii] : Y.sic_bin[ii]			
-			𝑆ₑᵣᵣ = @. 1/Y[ii, err]^2 #@. Y[ii, err]/Yin/sqrt(Y[ii, NNice] .-1)
-			𝑛 = length(ii)
-			ωᵢ = @. 𝑛*𝑆ₑᵣᵣ/sum(𝑆ₑᵣᵣ) #sqrt(𝑆ₑᵣᵣ/𝑛) #
-            tmp[i][var] = if ice==:μLF
-				curve_fit(fᵢ, Xin, Yin, [50, .5]) # ωᵢ, tmp[:co].lf_bin[ii], Y[ii] , [10, .5])
-			else
-				curve_fit(fₛ, Xin, Yin, [100, 1.0]) #ωᵢ, 
+			Y=filter(D->D.coupled==(co_status) && D.Δz==(varz), dat[(Δz=varz,)]) # && D.sic_bin<(100)
+			foreach(VARIN) do S
+				var = Symbol(ice, S)
+
+				err = replace(String(var), "μ"=>"σ") |> Symbol
+				NNice = replace(lowercase(String(ice)), "μ"=>"NN") |> Symbol
+				
+				## jj = (Y[!, :lf_bin].>0.02) #: (Y[!, :sic_bin].>85) #NNice] > 10) #(Y[!, :lf_bin] > 0.05)
+				ii = @. !isnan(Y[!, var]) #&& (Y[!, NNice]>10) && jj
+				Yin = Y[ii, var]
+				Xin = Y.sic_bin[ii]			
+				#𝑆ₑᵣᵣ = @. 1/Y[ii, err]^2 #@. Y[ii, err]/Yin/sqrt(Y[ii, NNice] .-1)
+				𝑛 = length(ii)
+				ωᵢ = let err_sig = @. ifelse(Y[ii, err]>0, Y[ii, err], Y[ii, var]/2) #inv(Y[ii, err]^2)
+					err_sig = @. inv(err_sig^2)
+					err_tot = mean(err_sig)
+					AnalyticWeights(err_sig/err_tot)
+				end
+				#abs(1 - (Y[ii, err]/Yin)^2))  #𝑛*𝑆ₑᵣᵣ/sum(𝑆ₑᵣᵣ) #sqrt(𝑆ₑᵣᵣ/𝑛) #
+            	tmp[i][Δz][var], r2[i][Δz][var], chi2[i][Δz][var] = let 𝑓 = fₛ #var==:μΓ ? fᵧ : fₛ
+					#println(var, " ", 𝑓)
+					Fx = curve_fit(𝑓, Xin, Yin, ωᵢ, [100, 10.0]) #ωᵢ, 
+					Yf = 𝑓(Xin, Fx.param)
+					n = length(Yf)
+					ϵ² = ωᵢ.*(Yin .- Yf).^2 #Fx.resid.^2
+					σ² = Y[ii, err].^2
+					p = dof(Fx)
+					ŷ = mean(Yin)
+					Chi_sq = sum(ϵ²./σ²)/p
+					VARᵣₑₛ = sum(ωᵢ.*(Yin .- Yf).^2) #/p
+					VARₜₒₜ = sum(ωᵢ.*(Yin .- ŷ).^2) #/(n-1)
+					r_sq = cor(Yin, Xin)^2 #1 - VARᵣₑₛ/VARₜₒₜ # cor(Yin, Yf)^2 #
+					Fx, r_sq, Chi_sq
+				end
+            	 
+				try
+                	con[i][Δz][var] = confidence_interval(tmp[i][Δz][var], 0.05) |> X->[[X[1][1], X[2][1]], [X[1][2], X[2][2]]]
+				catch e
+					println(e)
+					println(var, ": ", tmp[i][Δz][var].param, " ", length(ii))
+				end
 			end
-            r2[i][var] = cor(Xin, Yin)^2
-			try
-                con[i][var] = confidence_interval(tmp[i][var], 0.05) |> X->[[X[1][1], X[2][1]], [X[1][2], X[2][2]]]
-			catch e
-				println(e)
-				println(tmp[i][var].param, " ", length(ii))
-			end
-		end
-	end
+		end  # over variable ice type
     end  # end over co_status
-	tmp, r2, con
+	tmp, r2, chi2, con
 end
 
+# ╔═╡ c0be60c9-6bd7-42c0-ab89-2a888873a024
+Δβ[:de][:H][:μclb] #|> p-> plot(sic_xin, [fₛ(sic_xin, p[1]) fₛ(sic_xin, p[2])])
+
 # ╔═╡ f4f1cf08-4843-46ee-9da2-529b40321c94
-R² 
-
-# ╔═╡ 62deee04-af96-486a-a5fb-d8c9fbf4db5e
-rfit[:co]
-
-# ╔═╡ c21c2ffd-e195-4dd3-a4b1-8aaf76575d4f
-## jldsave("stats_fit_lwp_iwp_II.jld2"; rfit, R², Δβ)
-
-# ╔═╡ a48a0a1a-403b-4e3c-9ce6-618a1ceb1eaa
-rfit[:co][:μSIClwp].param, rfit[:de][:μSIClwp].param
+let r2=Dict(:coupled=>[], :Z=>[])
+for z in (:H, :L)
+	
+	for c in (:co, :de)
+		push!(r2[:coupled], c==:co)
+		push!(r2[:Z], ifelse(z==:H, -1, 1))
+		for v in keys(rfit[c][z])
+			!haskey(r2,v) && (r2[v]=[])
+			push!(r2[v], rfit[c][z][v].param[2]) #R²[c][z][v]) # |> atand)
+		end
+	end
+	end
+	pretty_table(HTML, r2)
+end
 
 # ╔═╡ 848150e8-f3ed-4324-9964-8a6ada5df1ce
 @bind ss Select([:co, :de], default=:co)
 
 # ╔═╡ f4e1159d-37ac-47b0-89ff-a9581aa3875f
-rfit[ss][:μSIClwp].param , margin_error(rfit[ss][:μSIClwp]), fₛ([20,10,0], rfit[ss][:μSIClwp].param)
+rfit[ss][:L][:μlwp].param , margin_error(rfit[ss][:L][:μlwp]), fₛ([30,15,5], rfit[ss][:L][:μlwp].param)
 
 # ╔═╡ 045d019e-9817-4bcc-8af8-6882ad43c615
-Δβ[:de][:μSIClwp], rfit[:de][:μSIClwp].param
+Δβ[:de][:L][:μlwp], rfit[:de][:L][:μlwp].param
+
+# ╔═╡ 47ca6697-a1f3-49ee-a8b8-b2938d1fe1a4
+begin
+	tmpplt = []
+	for mm in (1,2,3,4,11,12)
+		kakes = @df filter(d->month(d.date)==(mm) && d.lwp>(0) && d.paₓ==(-1), DB) groupedboxplot(mm<10 ? :winter.+1 : :winter, :lwp, group=:coupled, outliers=false, color=farben, marker=(farben,stroke(0),1), bar_width=0.45, legend=false, ytick=[0,50,100], ylim=(0,170), xlabel=ifelse(mm==4,"year",""),xtick=(jahren, ifelse(mm≠4,"" ,jahren)), xlim=extrema(jahren).+(-0.3,0.3), top_margins=-0Plots.mm)
+		push!(tmpplt, kakes)
+	end
+	plot(tmpplt..., layout=grid(6,1), size=(500,600), dpi=600)
+end
+
+# ╔═╡ ecbebaf3-95b9-44e4-bd33-84d278ed1c06
+let mdf=filter(d->d.coupled==(true), dat[(Δz=1,)])
+	@df mdf scatter(:sic_bin, :μΓ, yerror=:σΓ, xflip=true) #Γ δₕ
+	wk = @. inv(mdf.σΓ^2)
+	
+	fx(x,β) = @. β[1]+β[2]*exp((x/100)^2) #exp((x/100)^β[3]) # β[2]*(x/100)^β[3] #β[1]-β[2]exp((x/100)^2-1 ) #*log((1.01-x/100)) # β[2] *(1-x/100)+β[3]))
+	fofo = curve_fit(fx, mdf.sic_bin, mdf.μΓ, wk, [100, 10.]) #, .100])
+	r2 = cor(mdf.μΓ, fx(mdf.sic_bin, fofo.param))^2
+	pp = fofo.param
+	println(pp)
+	x = mdf.sic_bin
+	println([ones(length(x)) exp.((x/100))]*fofo.param[1:2])
+	fy = fx(x, fofo.param)
+	# predict with intervals:
+	cf = coef(fofo)
+	ci = confidence_interval(fofo, 0.05)    # 5% significance level
+	println(ci)
+	#tl, bl = fx(x, [ci[1][1], ci[2][2]]), fx(x, [ci[2][1], ci[1][2]]) #ci[1][1] .+ ci[2][2]*x,   ci[1][2] .+ ci[2][1]*x
+	#σp, σm = maximum([tl bl], dims=2) .- 2fy,  2fy .- minimum([tl bl], dims=2)
+	ypre = predict_curve_fit(exp.((x/100).^2 ), fofo, Y=mdf.μΓ)
+	#println([σm σp])
+	plot!(x,ypre.prediction, ribbon=ypre.sig_ci, fillalpha=0.3, label="curve_fit")
+	plot!(x, fy, label="$(r2)", legend=:bottomright) #; hline!([cf[1]],label="wet")
+end
+
+# ╔═╡ 22002a9b-e812-4148-846c-2debbe47b9f3
+rfit[:co][:H][:μlwp].param, rfit[:de][:H][:μlwp].param
+
+# ╔═╡ 7d062d2d-fec4-459a-840d-8b678f624c6c
+#savefig(cc, "/home/psgarfias/Downloads/quicklooks/nsa/$(wintertime)_HL_MicPhys_SIC.png")
+#savefig(cc, "/home/psgarfias/Downloads/quicklooks/nsa/$(wintertime)_HL_MacPhys_SIC.png")
+
+# ╔═╡ 0406bc8a-6054-4b40-9b87-be632dc28d32
+@df filter(d->d.σSIC>(0), DB) groupedboxplot(:winter, :σSIC./:μSIC, group=:coupled, bar_width=0.4, outliers=false, fillcolor=farben, label=["de" "co"], ylabel="LWP", size=(850,400))
+
+# ╔═╡ 6913d517-e07c-4962-9c6b-d090b1bb8faa
+# Creating the string for winter label like 2023/24 for the wintertime 2023 to 2024:
+#strwinter = [@sprintf("%04d/%02d", jj, (jj+1)-2000) for jj in jahren[1:end-1,1]];
+strwinter = [@sprintf("%02d/%02d", jj-2000, (jj+1)-2000) for jj in jahren[1:end-1,1]];
+
+# ╔═╡ 49654852-af74-468f-9ddd-cefa4f055907
+begin
+	var_meta = Dict(
+		:lwp=>(unit="g m⁻²", labe="LWP", lege=L"\rm{\overline{LWP}}", lim=(1,200), stats=:geometric),
+		:iwp=>(unit="g m⁻²", labe="IWP", lege=L"\rm{\overline{IWP}}", lim=(0.1, 125), stats=:geometric),
+		:der=>(unit="μm", labe="Droplet  "*L"r_{eff}", lege=L"\overline{r_{eff}}", lim=(3,22), stats=:geometric),
+		:ier=>(unit="μm", labe="Ice  "*L"r_{eff}", lege=L"\overline{r_{eff}}", lim=(28,55), stats=:geometric),
+		:T2m=>(unit="K", labe=L"\rm{T_{2m}}", lege=L"\rm{\overline{T_{2m}}}", lim=(240,274), stats=:aritmetic),
+		:Γ=>(unit="K km⁻¹", labe=L"Γ_{\textrm{cloud}}", lege=L"\overline{Γ}_\textrm{cloud}", lim=(-8,12.0), stats=:aritmetic),
+		:δₕ=>(unit="m", labe="Cloud depth ", lege=L"\delta H_\textrm{cloud}", lim=(50, 1f4), stats=:aritmetic),
+		:τc=>(unit="·", labe="Liquid "*L"\tau", lege=L"\overline{\tau}_\rm{cloud}", lim=(0.0,20), stats=:geometric),
+		:τi=>(unit="·", labe="Ice "*L"\tau", lege=L"\overline{\tau}_\rm{cloud}", lim=(0.0,2), stats=:geometric),
+		:clb=>(unit="m", labe="Liquid CBH", lege=L"\textrm{CBH}", lim=(50, 1f4), stats=:aritmetic),
+		:cldTT=>(unit="K", labe="Cloud top T", lege=L"\rm{\overline{CTT}}", lim=(244, 270), stats=:aritmetic),
+		:Tskin=>(unit="°C", labe="Skin Temp.", lege=L"\textrm{T_{skin}}", lim=(235,270), stats=:aritmetic),
+		:μSIC=>(unit="%", labe="SIC", lege=L"\rm{\overline{SIC}}", lim=(10,110), stats=:truncated),
+		:σSIC=>(unit="%", labe=L"\rm{\sigma_{SIC}}", lege=L"\rm{\sigma_{SIC}}", lim=(0,30), stats=:geometric),
+		:AμSIC=>(unit="%",labe=L"\textrm{SIC}_\bigodot",lege=L"\textrm{SIC}_\bigodot", lim=(0,100), stats=:truncated),
+		:AσSIC=>(unit="%",labe=L"\sigma_{\textrm{SIC}_\bigodot}",lege=L"\sigma_{\textrm{SIC}_\bigodot}", lim=(0,30), stats=:geometric),
+		:RμSIC=>(unit="%",labe=L"\textrm{SIC_\star}", lege=L"\textrm{\overline{SIC_\star}}", lim=(0,100), stats=:truncated),
+		:Pa=>(unit="kPa",labe="P", lege="Pressure", lim=(99,102), stats=:aritmetic),
+		:aoi=>(unit="·",labe="AO", lege="AO", lim=(-5,5), stats=:aritmetic),
+		:enso=>(unit="·",labe="ENSO", lege="ENSO", lim=(-2,5), stats=:aritmetic),
+		:pdo=>(unit="·",labe="PDO", lege="PDO", lim=(-2,5), stats=:aritmetic),
+	);
+end
 
 # ╔═╡ aab6bedd-c076-491f-b590-852f179e860b
 begin
@@ -536,75 +766,86 @@ begin
 	lf_lim = (-0.02, .55)
 	sic_lim = (7, 101) #(78, 101)
 	lf_xin = (.02:0.02:0.6)
-	sic_xin = (5, (10:10:100)...) |> collect #(75:100)
+	sic_xin = (10:10:100) |> collect #(75:100) (5, (10:10:100)...)
 	NNcol = cgrad(:starrynight, 15, categorical=true, alpha=0.5, rev=true, scale=:log10); #:grayyellow
 	NNlim =(10, 1.5f3)
+	tags = ["(a)","(b)","(c)","(d)","(e)","(f)","(g)","(i)"]
 	# **********************************************
 	# LWP vs SIC
-	#a1 = @df filter(r->r.lwp>(0), DBraw) histogram2d(:μSIC, (:lwp), bins=(60,200), color=NNcol, colorbar=false, colorbar_scale=:log10, ylim=(-15, 250), xlim=sic_lim, xflip=true, clim=NNlim );
-	# for LWP (decoupled):
-	
-	sic_yin = fₛ(sic_xin, rfit[:co][:μSIClwp].param)
-	a1 = plot(sic_xin, sic_yin, #ribbon=(sic_yin .- fₛ(sic_xin, Δβ[:co][:μSIClwp][1]), fₛ(sic_xin, Δβ[:co][:μSIClwp][2]) .- sic_yin), 
-	lc=:blue, lw=2, la=.7, fillalpha=0.5, fillcolor=farben[2], label="", ann=(85, 150, text(@sprintf("r²=%3.2f", R²[:co][:μSIClwp]), farben[2])))
+	a1 = []
+	b1 = []
+	c1 = []
 
-	sic_yin = fₛ(sic_xin, rfit[:de][:μSIClwp].param)
-	plot!(sic_xin, sic_yin, #ribbon=(sic_yin .- fₛ(sic_xin, Δβ[:de][:μSIClwp][1]), fₛ(sic_xin, Δβ[:de][:μSIClwp][2]) .- sic_yin),
-	lc=:red, lw=2, la=.7, fillalpha=0.5, fillcolor=farben[1], label="", ann=(28, 150, text(@sprintf("r²=%3.2f", R²[:de][:μSIClwp]), farben[1])))
-	
-	@df dat scatter!(:sic_bin, :μSIClwp, xerror=:sic_var, yerror=:σSIClwp, group=:coupled, label="", mc=farben, markerstrokecolor=:grey4, msw=1, lc=farben, lw=1.5, la=0.5, marker=([:^ :o], 5, 0.9), ylabel="LWP [g m⁻²]", xflip=true, xticks=(sic_xin[1:2:end], ""), ylim=(-5, 180))
-	
-	#
-	# for LWP (coupled):
-	#@df dat[:co] scatter!(:sic_bin, :μSIClwp, xerror=:sic_var, yerror=:σSIClwp, label="", mc=:dodgerblue1, markerstrokecolor=:royalblue, lc=:royalblue, lw=2.5, la=0.5, ms=6, marker=:circle)
-	# *********************************************
-	# IWP vs SIC
-	#b1 = @df filter(r->r.iwp>(0), DBraw) histogram2d(:μSIC, :iwp, bins=(60,500), color=NNcol, colorbar=false, colorbar_scale=:log10, ylim=(-10, 210), xlim=sic_lim, clim=NNlim);
-	# for IWP (decoupled):
-	b1 = @df dat scatter(:sic_bin, :μSICiwp, xerror=:sic_var, yerror=:σSICiwp, group=:coupled, label="", mc=farben, markerstrokecolor=:grey5, lc=farben, lw=1.5, la=0.5, marker=([:^ :o], 5, 0.9), xlabel="SIC [%]   "*L"f(\mathrm{WVT})", ylabel="IWP [g m⁻²]", legend=:topright, legendfontsize=9, xflip=true, xticks=sic_xin[1:2:end], ylim=(-5, 180))
-	sic_yin = fₛ(sic_xin, rfit[:co][:μSICiwp].param)
-	plot!(sic_xin, sic_yin, #ribbon=(sic_yin.-fₛ(sic_xin, Δβ[:co][:μSICiwp][1]), fₛ(sic_xin, Δβ[:co][:μSICiwp][2]).-sic_xin), 
-	lc=:blue, lw=2, la=.7, fillalpha=0.5, fillcolor=farben[2], label="", ann=(88, 150, text(@sprintf("r²=%3.2f", R²[:co][:μSICiwp]), color=farben[2])), top_margins=-4Plots.mm)
+	# TO PLOT THE GROUP OF VARIABLES ... CHAGE THE for([...]) LINE:
+	# variable options:  #  
+	foreach([:μlwp, :μder, :μiwp, :μier]) do var
+	#foreach([:μδₕ, :μclb, :μcldTT, :μΓ]) do var
+		# For other variables e.g. μder, μier, μcldTT, μlpr, μτc, μτi
+		
+		vv = replace(String(var), "μ" => "") |> Symbol
+		svar = replace(String(var), "μ" => "σ") |> Symbol
+		yy0 = diff([var_meta[vv].lim...])[1]
+		
+		foreach([(-1,:H),(1,:L)]) do (iz, P)
+			
+			tmpdf = rename(dat[(Δz=iz,)], var=>:var_bin, svar=>:var_std)
+			xr2, yr2 = if var==:μΓ
+				(46, 0.16yy0)
+			elseif vv==:δₕ || vv==:clb
+				(76, 0.5yy0)
+			else
+				(80, 0.83yy0)
+			end
+			
+			# For coupled:
+			𝑓 = fₛ #var==:μΓ ? fᵧ : fₛ
+			sic_yin = filter(d->d.coupled==true, tmpdf).var_bin # 𝑓(sic_xin, rfit[:co][P][var].param)
+			# calculation prediction +/- CI exp.(sic_xin/100).^2)
+			pre_yin = predict_curve_fit(exp.((sic_xin/100).^2), rfit[:co][P][var]; Y=sic_yin)
+		tp = plot(sic_xin, pre_yin.prediction,
+			ribbon=pre_yin.sig_ci, #1.0.*(sic_yin.-𝑓(sic_xin, Δβ[:co][P][var][1]), 𝑓(sic_xin, Δβ[:co][P][var][2]).-sic_yin),
+			lc=:blue, lw=2, la=.7, fillalpha=0.2, fillcolor=farben[2], label="",
+			ann=(xr2, yr2+var_meta[vv].lim[1], text(L"r^2="*@sprintf("\$%3.2f\$\n\$\\chi^2=%3.2f\$", R²[:co][P][var], Chi²[:co][P][var]), 12, color=farben[2])), top_margins=-4Plots.mm)
+			
+			# For decoupled: exp.((sic_xin/100).^2)
+			sic_yin = filter(d->d.coupled==false, tmpdf).var_bin # 𝑓(sic_xin, rfit[:de][P][var].param)
+			pre_yin = predict_curve_fit(exp.((sic_xin/100).^2), rfit[:de][P][var]; Y=sic_yin)
+		plot!(sic_xin, pre_yin.prediction,
+			ribbon=1.0.*pre_yin.sig_ci, #(sic_yin.-𝑓(sic_xin, Δβ[:de][P][var][1]), 𝑓(sic_xin, Δβ[:de][P][var][2]).-sic_yin),
+			lc=:red, lw=2, la=.7, fillalpha=0.2, fillcolor=farben[1], label="",
+			ann=(xr2-25, yr2+var_meta[vv].lim[1], text(L"r^2="*@sprintf("\$%3.2f\$\n\$\\chi^2=%3.2f\$", R²[:de][P][var], Chi²[:de][P][var]), 12, color=farben[1]), :left), top_margins=ifelse(isempty(c1), 0, -4)Plots.mm, left_margin=-3.5(1+iz)Plots.mm)
 
-	sic_yin = fₛ(sic_xin, rfit[:de][:μSICiwp].param)
-	plot!(sic_xin, sic_yin, #ribbon=(sic_yin .- fₛ(sic_xin, Δβ[:de][:μSICiwp][1]), fₛ(sic_xin, Δβ[:de][:μSICiwp][2]).- sic_yin), 
-	lc=:red, lw=2, la=.7, fillalpha=0.5, fillcolor=farben[1], label="", ann=(28, 150, text(@sprintf("r²=%3.2f", R²[:de][:μSICiwp]), color=farben[1])), top_margins=-4Plots.mm)
-	
-	
-	# for IWP (coupled):
-	#@df dat[:co] scatter!(:sic_bin, :μSICiwp, xerror=:sic_var, yerror=:σSICiwp, label="coupled", mc=:dodgerblue1, markerstrokecolor=:royalblue, lc=:royalblue, lw=2.5, la=0.5, ms=6, marker=:circle, xlabel="SIC [%]")
+		@df tmpdf scatter!(:sic_bin, :var_bin, yerror=:var_std, group=:coupled, 
+			lc=farben, lw=1.0, la=0.5, marker=([:^ :o], 5), mc=farben, msw=1, msc=:grey,
+			label=ifelse(length(c1)!=5,"", ["de" "co"]), legend=:topright, legendfontsize=8, legend_background_color=false,
+			ann=(97, 0.85yy0 + var_meta[vv].lim[1], popfirst!(tags)),
+			xflip=true, xticks=(sic_xin[1:2:end], ""), xlim=(0, 102),
+			yscale=ifelse( any(vv ∈ (:clb, :δₕ)), :log10, :identity),
+		ylabel=ifelse(iz==1,"",var_meta[vv].labe*" [$(var_meta[vv].unit)]"), ylim=var_meta[vv].lim, # max.(0.1*sign(var_meta[vv].lim[1]), var_meta[vv].lim),
+			left_margins=ifelse(P==:L, -5, 4)Plots.mm)
+		push!(c1, tp)
+		end
+		
+	end
+	# retrieving the y-ticks values from H-pressure:
+	foreach(enumerate(c1)) do (j, tp)
+		iseven(j) && plot!(tp, yticks=(yticks(tp[1])[1], ""))
+	end
+	plot!.([c1[end-1], c1[end]], xticks=(sic_xin[1:2:end], sic_xin[1:2:end]), xlabel="SIC [%]")
+	plot!(c1[1], title="High Pressure")
+	plot!(c1[2], title="Low Pressure")
 
-	# Der vs LF  XXXX
-	## c0 = @df filter(r->r.der>(0), DBraw) histogram2d(:μLF, :der, bins=40, color=NNcol, colorbar=false, colorbar_scale=:log10 , ylim=(0, 60), xlim=lf_lim, clim=NNlim);
-	# for Der:
-	## @df dat scatter!(:lf_bin, :μLFder, xerror=:lf_var, yerror=:σLFder, group=:coupled, label="", mc=farben, markerstrokecolor=:grey2, msw=1, lc=farben, lw=1.5, la=0.5, marker=([:^ :o], 5, 0.9), ylabel=L"<r_{eff}>~/~\mathrm{\mu m}" )
-	## plot!((.0:0.02:0.6), x->fᵢ(x, rfit[:μLFder].param), lc=:royalblue1, lw=2, la=.5, label="")
-
-	# *******************************************************
-	# Der vs SIC
-	#c1 = @df filter(r->r.der>(0), DB) histogram2d(:μSIC, :der, bins=(50, 300), color=NNcol, colorbar=false, colorbar_scale=:log10 , ylim=(0, 50), xlim=sic_lim, clim=NNlim);
-	c1 = @df dat scatter(:sic_bin, :μSICder, xerror=:sic_var, yerror=:σSICder, group=:coupled, label="", mc=farben, ylabel="droplet  "*L"r_{eff}"*" [μm]", markerstrokecolor=:grey7, msw=1, lc=farben, lw=1.5, la=0.5, marker=([:^ :o], 5, 0.9), xflip=true, xticks=(sic_xin[1:2:end], ""), ylim=(0,30))
-	plot!(sic_xin, x->fₛ(x, rfit[:co][:μSICder].param), lc=:blue, lw=2, la=.7, label="")
-	plot!(sic_xin, x->fₛ(x, rfit[:de][:μSICder].param), lc=:red, lw=2, la=.7, label="")
+	# creating the plots' mosaic with layout 4x2
+	cc = plot(c1..., layout=(4,2), tickdir=:out, minorticks=true, guidefontsize=12, tickfontsize=11, size=(800,700), dpi=600, framestyle=:box) #left_margin=4Plots.mm,
 	
-	# *********************************************************
-	# Ier vs SIC
-	#d1 = @df filter(r->r.ier>(1), DB) histogram2d(:μSIC, :ier, bins=(50, 300), color=NNcol, colorbar=false, colorbar_scale=:log10 , xlim=sic_lim, clim=NNlim, ylim=(0, 60))
-	# for Ier:
-	d1 = @df dat scatter(:sic_bin, :μSICier, xerror=:sic_var, yerror=:σSICier, group=:coupled, label="", mc=farben, ylabel="ice "*L"r_{eff}"*" [μm]", markerstrokecolor=:grey7, msw=1, lc=farben, lw=1.5, la=0.5, marker=([:^ :o], 5, 0.9), xflip=true, xticks=sic_xin[1:2:end], xlabel="SIC [%]   "*L"f(\mathrm{WVT})", ylim=(10, 50))
-	plot!(sic_xin, x->fₛ(x, rfit[:co][:μSICier].param), lc=:blue, lw=2, la=.5, label="")
-	plot!(sic_xin, x->fₛ(x, rfit[:de][:μSICier].param), lc=:red, lw=2, la=.5, label="")
-	
-	cc = plot(a1,c1, b1, d1, layout=(2,2), tickdir=:out, minorticks=true, guidefontsize=14, tickfontsize=13, size=(800,600), dpi=600, left_margin=4Plots.mm, framestyle=:box)
-	
-	SAVEFIG ? savefig(cc, "/home/psgarfias/quicklooks/nsa_yearly/$(wintertime)_AOI$(aoflag)_LWP_SIC.png") : cc
+	SAVEFIG ? savefig(cc, "/home/psgarfias/quicklooks/nsa_yearly/$(wintertime)_HL_MicPhys_SIC.png") : cc
 end
 
 # ╔═╡ 1f6657ba-9910-48fc-84a3-399a28d84ef5
 begin
 	idxco = findall(DB[!, :coupled])
 	idxde = findall(.!DB[!, :coupled])
-	myedges = range(0.1, stop=1000.0, length=50) |> collect
+	myedges = range(1, stop=1000.0, length=50) |> collect
 	Nlf02co = filter(c->(c.lf₀==(true) && c.coupled==(true)), DB).lwp |> length
 	Nlf02de = filter(c->c.lf₀==(true) && c.coupled==(false), DB).lwp |> length
 	#marginal
@@ -614,97 +855,531 @@ begin
 	iwphistde = StatsBase.fit(Histogram, DB[idxde, :iwp], myedges)
 		#DB[idxde, :lwp], colorbar_scale=:log10, colorbar=true, colorbar_position=:left)
 	#vline!([-5.5])http://localhost:1234/?secret=QNUDmOcxyerror=:σχᵢ, 
-	scatter(lwphistco.weights, lwphistde.weights, ms=9, zcolor=(myedges), clim=(10, 1000), xscale=:log10, yscale=:log10, xlim=(.51,1f4),ylim=(.51,1f4), label="Liquid", xlabel="# Coupled cases", ylabel="# Decoupled cases", color=NNcol)
-	scatter!(iwphistco.weights, iwphistde.weights, zcolor=(myedges), clim=(1, 400), xscale=:log10, yscale=:log10, xlim=(.51,1f4),ylim=(.51,1f4), ms=8, m=:star6, label="Ice",color=NNcol, colorbar_titlefontsize=13, colorbar_title="\nWater path / g m⁻²", colorbar_scale=:log10)
-	plot!([1, 1f4],[1, 1f4], ls=:dash, lc=:black, lw=2, label="1:1")
-	plot!([10 1f2; 1f4 1f4],[1 1; 1f3 1f2], lw=2, ls=:dashdot, lc=[:tomato3 :tomato], label=["10:1" "100:1"], frame_style=:box, tickdir=:out, minorticks=true, tickfontsize=13, guidefontsize=14, legendfontsize=13, legend=:topleft, margin=8Plots.mm, size=(600,500), dpi=600)
+	scatter(lwphistco.weights, lwphistde.weights, ms=7, zcolor=(myedges), clim=(1, 1000), xscale=:log10, yscale=:log10, xlim=(.51,1f6),ylim=(.51,1f6), label="Liquid", xlabel="# Coupled cases", ylabel="# Decoupled cases", color=NNcol)
+	scatter!(iwphistco.weights, iwphistde.weights, zcolor=(myedges), clim=(1, 800), xscale=:log10, yscale=:log10, xlim=(.51,1f6),ylim=(.51,1f6), ms=6, m=:star6, label="Ice",color=NNcol, colorbar_titlefontsize=13, colorbar_title="\nWater path [g m⁻²]", colorbar_scale=:log10)
+	plot!([1, 1f6],[1, 1f6], ls=:dash, lc=:black, lw=2, label="1:1")
+	plot!([10 1f2; 1f6 1f6],[1 1; 1f5 1f4], lw=2, ls=:dashdot, lc=[:tomato3 :tomato], label=["10:1" "100:1"], frame_style=:box, tickdir=:out, minorticks=true, tickfontsize=13, guidefontsize=14, legendfontsize=13, legend=:topleft, margin=8Plots.mm, size=(600,500), dpi=600)
 	
 	#plot(histco); plot!(histde)
 end
 
-# ╔═╡ 0406bc8a-6054-4b40-9b87-be632dc28d32
-@df filter(d->d.σSIC>(0), DB) groupedboxplot(:winter, :σSIC./:μSIC, group=:coupled, bar_width=0.4, outliers=false, fillcolor=farben, label=["de" "co"], ylabel="LWP", size=(850,400))
+# ╔═╡ cd9c2bd6-50d2-4832-b35d-d4c40891d5e8
+md"""
+#### Subroutine for FFTW funciton:
+"""
 
-# ╔═╡ 6913d517-e07c-4962-9c6b-d090b1bb8faa
-strwinter = [@sprintf("%04d/%02d", jj, (jj+1)-2000) for jj in jahren[1:end-1,1]];
+# ╔═╡ 34a57d0f-b3f3-4ed3-9988-0fe50a7c4764
+md"""
+SIC range: 	$(@bind siclim Select([(0,100)=>"All", (0,81)=>"(0,81]", (81,96)=>"(81,96]", (96,98)=>"(96,98]", (98,100)=>"(98,100]"]))
+Variable: $(@bind varva confirm(Select([:T2m, :lwp, :iwp, :σSIC, :clb, :δₕ, :Tskin, :der, :ier, :Γ, :cldTT])))
+Pressure: $(@bind paxva confirm(Select([:H, :L])))
+"""
 
-# ╔═╡ ef4e30fb-e345-49df-9569-83b523cb1207
-strwinter
+# ╔═╡ 6801d499-e203-45e3-b6a1-6e2878779787
+"""
+Function to simulate the GLM function ```predict(GLM.model)``` for LsqFit.jl package (temporal solution):
+```julia-repl
+julia> df_pr = predict_curve_fit(X, cfit)
+julia> df_pr = predict_curve_fit(X, cfit; lev=0.9, Y, ω, pᵢ)
+```
 
-# ╔═╡ 49654852-af74-468f-9ddd-cefa4f055907
-begin
-	var_unit = Dict(:lwp=>"g m⁻²", :iwp=>"g m⁻²", :der=>"μm", :ier=>"μm", :T2m=>"°C", :Γ=>"K km⁻¹", :δₕ=>"m", :clb=>"m", :Tskin=>"°C", :σSIC=>"%", :AμSIC=>"%", :RμSIC=>"%");
-	var_label = Dict(:lwp=>"LWP", :iwp=>"IWP", :der=>"Droplet  "*L"r_{eff}", :ier=>"Ice   "*L"r_{eff}", :T2m=>"T2m", :Γ=>L"Γ_{cloud}", :δₕ=>"Cloud depth "*L"δH", :clb=>"Liquid cloud base height", :Tskin=>"Skin Temp.", :σSIC=>"SIC  "*L" f(\mathrm{WVT})", :AμSIC=>"SIC 50km "*L"\oslash", :RμSIC=>"SIC  "*L"f(\star)");
-	var_lege = Dict(:lwp=>L"\overline{LWP}", :iwp=>L"\overline{IWP}", :der=>L"\overline{r_{eff}}", :ier=>L"\overline{r_{eff}}", :T2m=>L"\overline{T_{2m}}", :Γ=>L"\overline{Γ}_{cloud}", :δₕ=>L"\overline{δH}_{cloud}", :clb=>L"\overline{CBH}", :Tskin=>L"\overline{T}_{skin}", :σSIC=>L"\overline{SIC}", :AμSIC=>L"\overline{SIC}", :RμSIC=>L"\overline{SIC}");
+where:
+* ```X::Vector``` independent varaible data,
+* ```cfit::LsqFit.curve_fit``` the curve fitting output model
+Optional arguments:
+* ```lev::Real``` level of confident (default 0.95) for 95% CI
+* ```Y::Vector``` dependent or model estimated variable, (default empty)
+* ```ω::Union{Vector, AnalyticWeights}```, weights for Y (default all ones)
+* ```pᵢ::UnitRange{Int}``` indexes of model parameters to consider (default=(1:2))
+Output:
+* ```DataFrame(prediction, sig_ci)```
+
+Note that prediction is considered as ```y(X, b) = b[1] + b[2]X``` with only parameters ```b=cfit.param[pᵢ]``` are considered. If the model is non-linear, then use with caution and ensure the variable ```X``` is converted to fulfill the linear model.
+"""
+function predict_curve_fit(X::Vector, cfit; lev::Real=0.95, Y::Vector=[], ω::Union{Vector, AnalyticWeights}=[], pᵢ::UnitRange{Int}=(1:2))::DataFrame
+	
+	n = length(X)
+	ω = ifelse(isempty(ω), ones(n), ω)
+	α = 1- lev
+	β = cfit.param
+	np = length(β)
+	ν = n - length(pᵢ)  # degrees of freedom for 2 parameters
+	newx = [ones(n) X]
+	y_hat = newx*β[pᵢ]
+	
+	y_res = isempty(Y) ? cfit.resid : ω.*(y_hat .- Y)
+	
+	y_pre = ifelse(np==2, 0, y_hat .- mean(y_hat))
+	MSE = sum((y_res .- y_pre).^2)/ν
+	
+	# Note: predict from GLM returns DataFrame(prediction=Ym, lower= -cretinterval, upper=2Ym.-cretinterval)
+	
+	# B = vcov(cfit)[pᵢ, pᵢ] # variance, co-variance matrix of the coefficients.
+	#se = diag(newx*B*newx') .|> sqrt
+	x_bar = mean(X)
+	δx² = @. (X - x_bar)^2
+	
+	se = MSE.*(1/n .+ δx²/sum(δx²)) .|> sqrt
+	ret_ci = se.*quantile(TDist(ν), α/2)
+	
+	return DataFrame(prediction=y_hat, sig_ci=ret_ci) #lower= ret_ci, upper=ret_ci)
 end
+
+# ╔═╡ d207a342-af32-4d36-b7d9-41505345ef87
+"""
+Function to compute t-Test parameters from a givem curve_fit model.
+```julia-repl
+julia> t_table = t_test4model(X, Y, ϵ_y, model, 𝑓)
+julia> t_table = t_test4model(X, Y, ϵ_y, model, 𝑓; pᵢ=(1:4))
+julia> t_table = t_test4model(X, Y, ϵ_y, model, 𝑓; fk=2, lev=0.90)
+```
+where:
+* ```X::Vector``` independent variable,
+* ```Y::Vector``` dependent variable,
+* ```ϵ_y::Vector``` error for the dependent variable,
+* ```model::LsqFit.LsqFitResults``` a output of ```curve_fit``` function,
+* ```𝑓::Function``` used to obtain the ```model``` best fit.
+Optional arguments:
+* ```pᵢ::Int``` or ```::Indexes``` the index of the ```curve_fit``` parameter to output (default 2),
+* ```fk::Real``` a factor to scate the outputs e.g. ```fk=2``` is ```2σ``` (default 10),
+* ```lev::Real``` confidence level to use (default 0.95).
+Output:
+* ```t_table::NamedTuple{(coef::Real, se::Real, CI::Real, p_value::Real, snr::Real, Chi_sq::Real, R_sq::Real, RMSE::Real}```
+or if pᵢ is a range like (1:2),
+* ```t_table::NamedTuple{(coef::Vector, se::Vector, CI::Vector, p_value::Vector, snr::Vector, Chi_sq::Real, R_sq::Real, RMSE::Real}```
+with the outputs for ```coef```, ```se```, ```CI``` are multiplied by the given optional input factor ```fk```.
+"""
+function t_test4model(X::Vector, Y::Vector, Yerr::Vector, model::LsqFit.LsqFitResult, 𝑓::Function; fk::Real=10, pᵢ::Union{Int, UnitRange{Int}}=2, lev::Real=0.95)
+	μₜ = coef(model)
+	σₜ = standard_errors(model)
+	ν = dof(model)
+
+	inan = @. !isnan(Y)
+	Y = Y[inan]
+	X = X[inan]
+	Yerr = Yerr[inan]
+	
+	y̅ = median(Y)
+	ŷ = 𝑓(X, model.param)
+	
+	# RMSE, Chi² and R²:
+	ωt = model.wt[inan]
+	#ϵ² = model.resid.^2   # include the weights!
+	ϵ² = (Y .- ŷ).^2
+	n = length(ϵ²)
+	IQR = quantile(Y, [.25, .75]) |> diff |> first
+	RMSE = √(sum(ϵ²)/n)/IQR
+
+	
+	SSE = sum(ωt.*ϵ²)
+	SST = sum(ωt.*(Y .- y̅).^2)
+	R_sq = 1 - SSE/SST
+
+	σ² = eltype(Yerr)<:Tuple ? ((last.(Yerr) .- first.(Yerr))/2).^2 : Yerr.^2
+	Chi_sq = sum(ϵ²./σ²)/ν
+	
+	# T-statistics:
+	tT = μₜ./σₜ
+	
+	CI = confint(model, level=lev)
+	p_val = ccdf.(Ref(FDist(1, ν)), abs2.(tT))
+	
+	return (coef=fk*μₜ[pᵢ], se=fk*σₜ[pᵢ], CI=fk.*CI[pᵢ], p_value=p_val[pᵢ], snr=abs(tT[pᵢ]), Chi_sq=Chi_sq, R_sq=R_sq, RMSE=RMSE )
+end
+
+# ╔═╡ 409e45a7-79a9-429b-9889-de843dac49a7
+# Preparing strings to be used in plots for legend, labels, etc:
+begin
+	siclimstr = siclim==true ? "All SIC" : @sprintf("%d < SIC ≤ %d", siclim...) #  ("SIC ∈ (%d,%d]", siclim...)
+end
+
+# ╔═╡ 8e7dea67-d49a-442d-a76e-6bbd7172ebcc
+begin
+	stat_labe = Dict(:q50=>"median ", :q25=>"Q1 ", :q75=>"Q3 ", :μ=>"mean ");
+	# Plotting time series with original data points:
+	@df mdf[:q50][paxva] scatter(:winter .+[.05 -.05], [:Y_de :Y_co], yerror=[:ϵ_de :ϵ_co], mc=farben, lw=2, la=0.6, lc=farben,  marker=([:^ :o], 6), mscolor=:grey, msw=2, label=ifelse(siclim==(10,100), ["de: "*L"\mu_{1/2}\pm \sigma_{m}" "co: "*L"\mu_{1/2}\pm \sigma_{m}"], ""), legend_column=2, legendfontsize=10, legend_position=:top, legendforegroundcolor=false, legendbackgroundcolor=false,
+	gridlinewidth=.5, frame=:box, tickdir=:out, yminorticks=true, ytickfontsize=12, yguidefontsize=14,
+	xtickfontsize=11, xguidefontsize=11,
+	title=siclimstr*" & "*String(paxva)*"-pressure")
+
+	# Plotting time series with smoothed data points:
+	@df mdf[:q50][paxva] scatter!(:winter .+[.05 -.05], [:S_de :S_co], marker=:x, ms=5, mc=farben, label=false)
+	
+	# Plotting fitted trend lines:
+	@df mdf[:q50][paxva] plot!(:winter, [:lin_de :lin_co], ribbon=[:err_de :err_co], lw=2, la=0.9, fillalpha=0.2, lc=farben, fillcolor=farben, label=get_trend_str(ravstat, varva, :q50, paxva; vargof=:r2chi2).*"\n".*get_trend_str(ravstat, varva, :q50, paxva),
+	xtick=(:winter, strwinter), xrot=30, xlabel = "Wintertime [+2000 year]",
+	yscale=ifelse(any(varva ∈ (:δₕ, )), :log10, :identity), ylabel = var_meta[varva].labe*" [$(var_meta[varva].unit)]", ylim=yye_lims,
+	#ylim=ifelse(varva!=:Γ, var_meta[varva].lim.*(1,1.0), (0, 10)), # for Γ_cloud (0, 10) #var_meta[varva].lim.*(1,1.0)
+	legend=(0.08, 0.92), bottom_margins=+2Plots.mm)
+	
+end
+
+# ╔═╡ e868b491-2463-4e0a-a7be-60f896eed14f
+"""
+Function to return a formated string matrix with either the r² (if f2=true) or the trend ± err, for the given ```df::DataFrame``` with the tabular information of the fit for all statistics and all ENSO/PDO frequencies.
+```julia-repl
+str = get_trend_str(df, :lwp, :q50, :H; r2=true)
+```
+"""
+function get_trend_str(df::DataFrame, var::Symbol, stat::Symbol, pax::Symbol; vargof=nothing)
+
+	# making String callable 2-var:
+	@eval (kk::String)(x, y, U) = Printf.format(Printf.Format(kk), x, y, U)
+	
+	# making String callable 1-var:
+	@eval (kk::String)(x, F) = Printf.format(Printf.Format(kk), x, F)
+	
+	if isnothing(vargof)
+		# Selecting the variable and trend values to show:
+		trend_str = select(df, [:hat, :sig, :coupled]=>ByRow((x,y,U)->"\$\\frac{\\Delta}{\\Delta t}\$= %+2.1f \$\\pm\$%2.1f %s"(x, y, "[$(var_meta[var].unit) dec⁻¹]")) => :lege, :type, :coupled, :pax)
+		
+	elseif vargof==:chi2freq
+		trend_str = select(df, [:chi², :θ]=>ByRow((x, P)->"\$\\chi^2\$=%3.2f  @  \$\\nu_k^{-1}\$=%2.1f [yrs]"(x,inv(P)) ) => :lege, :type, :coupled, :pax)
+		
+	elseif vargof==:r2freq
+		trend_str = select(df, [:r², :θ]=>ByRow((x, P)->"\$r^2\$=%3.2f  @  νₖ⁻¹=%2.1f [yrs]"(x,inv(P)) ) => :lege, :type, :coupled, :pax)
+		
+	elseif vargof==:r2chi2
+		trend_str = select(df, [:r², :chi²]=>ByRow((x, P)->"\$r^2\$=%3.2f  &  \$\\chi^2\$=%3.2f"(x,P) ) => :lege, :type, :coupled, :pax)
+		
+	else
+		trend_str = select(df, [:r², :rmse]=>ByRow((x, P)->"\$r^2\$=%3.2f  &  RMSE=%3.2f"(x,P) ) => :lege, :type, :coupled, :pax)
+		
+	end
+		
+	filter!(d->d.type==stat && d.pax==pax, trend_str)
+	# converting it to format for [de co] legend:
+	return reshape(trend_str.lege, 1,2)
+end
+
+# ╔═╡ 74c94058-4c91-4a7b-8060-29e4ac6104c2
+md"""
+## Function to model a time series $y_s(t)$ with trend and periodic component following:
+$y_s(t, \beta; \nu_k) = \beta_1 + \beta_2 t + \beta_3\,cos(2\pi\,\nu_k\,t - \beta_4) + \epsilon$
+with $\beta$ the parameters for best fit to the data, $\nu_s$ the frequency of the periodic signal. Optionally, it can be chosen $\nu_s$ as a fixed parameter initialized by e.g. the ENSO frequency value of $\nu_s$ = 0.176275, or as a fifth free paramter $\beta_5$ to be fitted.
+To optain the time series trend, the coeficient $\beta_2$ in [U/yr] is isolated, with $t$ is in years and $y$ in [U].
+"""
+
+# ╔═╡ 6e6c10a4-1fc2-4b82-a619-608100d110f2
+𝑦ₛ(t, β; νₛ=nothing) = if !isnothing(νₛ)
+		@. β[1] + β[2]t + β[3]cos(2π*νₛ*t - β[4])
+	else
+		@. β[1] + β[2]t + β[3]cos(2π*β[5]*t - β[4])
+	end
+
+# ╔═╡ deef8546-317e-40c9-8992-b721e7e091e9
+md"""
+### Function to represent the trend of the time series:
+$y_t(t, \beta) = \beta_1 + \beta_2 t + \epsilon$
+with the parameter $\beta_2$ is the trend of the time series in [U/yr].
+"""
+
+# ╔═╡ a06b25e1-6897-4aab-bc5a-32b8bc29ebf7
+𝑦ₜ(t, β) = @. β[1] + β[2]t
+
+# ╔═╡ d8b6dba6-aeb8-4d49-bf49-e576338f08e3
+"""
+Function to fit the time-series data to a cycling function (as model given above).
+```julia-repl
+julia> enso_fit(Mdf, :lwp, :co, :H; θ=0.176, β₀=[100,2.1,10,0.5])
+julia> enso_fit(Mdf, :lwp, :co, :H; fk=10)
+```
+Where:
+* ```Mdf::DataFrame``` is the yearly/winterly data time series classified as :co/:de, :H/:L, for all variables.
+* ```var::Symbol``` the variable to use for the fitting, e.g. :lwp, :iwp, etc.
+* ```cc::Symbol``` the coupled status, e.g. :co or :de
+* ```pa::Symbol``` the pressure system identifier, e.g. :H or :L
+* ```θ::Real``` (optional) the frequency to use in the fitting as free parameter, default ```nothing```
+* ```β₀::Vector{Real}``` (optional) vector for parameter to initiate the fitting, default ```[50, 1.5, 10, 0.1]```
+* ```fk::Real``` (optional) factor to multiply the trend parameter from the fitting, default 1.
+
+In case ```θ``` is not given, then it is no free parameter but rather a fitting parameter.
+"""
+function enso_fit(mdf::Dict, var::Symbol, cc::Symbol, pa::Symbol; θ = nothing, β₀=[50, 1.5, 10, 0.1], fk=1)
+		
+	ym(t, β) = 𝑦ₛ(t, β; νₛ=θ)
+	
+	β₀ = ifelse(!isnothing(θ), β₀, [β₀..., 0.176275])
+	
+	cc_var = Symbol("Y_", cc)
+	cc_err = Symbol("ϵ_", cc) 
+	# defining weights:
+	xdat, ydat, ωt, σ² = let D = mdf[var][pa][:, cc_err]
+		xdat = mdf[var][pa].winter
+		ydat = mdf[var][pa][:, cc_var]
+		
+		err_sig = [(typeof(E)<:Tuple ? ((last(E)+first(E))/2) : E ) for E ∈ D].^2 .|> inv
+		
+		iout = @. isnan(err_sig) || ~isfinite(err_sig) #findall(x->isnan(x), err_sig)
+		tot_sig = all(iout) ? 1.0 : mean(err_sig[.~iout])
+		err_sig[iout] .= tot_sig
+		W = @. err_sig/tot_sig #abs(1- (err_sig/ydat)) #abs(1- (err_sig/ydat)^2)
+		iout = findall(!isnan, ydat)
+		
+		xdat[iout], ydat[iout], AnalyticWeights(W[iout]), inv.(err_sig[iout])
+	end
+	
+	# Fitting the data to 𝑦ₛ with waights ωt :
+	mfit = curve_fit(ym, xdat, ydat, ωt, β₀)
+
+	# extract the fitted trend and its uncertainty and multiply them by factor fk (if given):
+	mtest = t_test4model(xdat, ydat, sqrt.(σ²), mfit, ym; fk=fk)
+	# combining R_sq and RMSE to a unified parameter to minimize:
+	K = let 𝑉=[mtest.Chi_sq, mtest.RMSE^2]
+		#, ([(1-R_sq)^2, RMSE^2]) #(sqrt∘sum)([inv(R_sq)^2, RMSE^2])
+		#(0.0 ≤ mtest.RMSE ≤1.0) && push!(𝑉, mtest.RMSE^2)
+		(0.0 ≤ mtest.R_sq ≤1.0) && push!(𝑉, 1 - mtest.R_sq)
+		(sqrt∘mean)(𝑉)
+	end
+	
+	# Create the DataFrame output:
+	outdf = DataFrame(type=var, hat=mtest.coef, sig=mtest.se, CI95=mtest.CI, pval=mtest.p_value, snr=mtest.snr, coupled=cc, pax=pa, r²=mtest.R_sq, rmse=mtest.RMSE, chi²=mtest.Chi_sq , cost=K )
+	
+	return outdf, mfit
+end
+
+# ╔═╡ 72a99203-ff45-477f-8258-b4da6bf96dab
+# selection of DataFrame containing only the ENSO/PDO frequency selected:
+#### wavstat = combine(groupby(allwavstat, :coupled), df->filter(d->d.θ==θₖ[d.coupled], df))
+
+# ╔═╡ 1e247533-a600-40e1-beeb-f2ade77a4998
+# md"""
+# #### Finding the maximum r² from all possible fits depending on Θₚ frequencies:
+# $(Kmin=filter(d->d.type==:q50 && d.pax==paxva, allwavstat) |> df-> combine(groupby(df, :coupled), :cost=>argmin =>:Kmin) |> df->permutedims(df,1) )
+#"""
+
+# ╔═╡ f5988ab9-9fb4-4209-837c-ec6328430307
+#md"""
+#Coupled period: $(@bind θcₖ Select(Θₚ.νₖ .=> Θₚ.Pₖ; default=Θₚ.νₖ[Kmin.co...]) )
+#Decoupled period: $(@bind θdₖ Select(Θₚ.νₖ .=> Θₚ.Pₖ; default=Θₚ.νₖ[Kmin.de...]) )
+#"""
+
+# ╔═╡ 6846cf1f-9a49-4731-8552-189b8c095833
+#@df filter(d->d.lwp<1f3 && d.iwp<1.5f3, DBraw) histogram(log10.([:lwp :iwp]), yscale=:log10); vline!([log10(5)])
+@df filter(d->d.lwp>0 && d.iwp>0, DB) scatter(:lwp, :iwp, m=:+, ms=1, xscale=:log10, yscale=:log10, minorgrid=true); vline!([5 0.8f3]); hline!([5 3f3])
+
+# ╔═╡ e533eb73-dfaf-4928-9be6-72340edca990
+@df DataFrame((:co, :de).=>[rfits[c][:q50][paxva].resid for c in (:co, :de)]) density([:co, :de], bandwidth=1)
 
 # ╔═╡ 5d562554-9112-4856-b7a4-5e8ff22ea3d5
-function co_de_fit(newDB)
-	tmdf = groupby(newDB, :winter) |> d->combine(d) do df
-			Y_co = mean(filter(d->d.coupled==(true),df).Y_var)
-			Y_de = mean(filter(d->d.coupled==(false),df).Y_var)
-			(Y_co =Y_co, Y_de=Y_de, lin_co=0.0, lin_de=0.0)
+function co_de_fit(newDB; fitmodel=false, window=6, edges=true)
+
+	# Assigning keys for the type of statistics to use for fitting curve: e.g. q50 is median ± mad
+	fkey = Dict(:q50=>f->Nlu(f;stats=:median), :q25=>f->Nlu(f;stats=:q25), :q75=>f->Nlu(f;stats=:q75), :μ=>f->Nlu(f;stats=var_meta[varva].stats))
+
+	# Assigning output dictionaries: rfits contains the GLM fitting models, and dffit the DataFrame with values:
+	tmpdic = Dict(k=>Dict() for k in keys(fkey))
+	rfits = Dict(:co=>Dict(k=>Dict() for k in keys(fkey)),
+					:de=>Dict(k=>Dict() for k in keys(fkey)) )
+	dffit = Dict(k=>Dict() for k in keys(fkey))
+
+	# ==========
+	# Function to get the prediction and confidence interval: [prediction, prediction-lower, upper-prediction]
+	function pred_low_hig(X, Y, rfit, W; lev=0.95)
+		#garbage = predict(rfit, df, interval = :confidence, level = lev)
+		garbage = if typeof(rfit)<:LsqFit.LsqFitResult
+			#Ŷ = 𝑦ₜ(df.winter, rfit.param)
+			predict_curve_fit(X, rfit; lev=lev, Y=Y, ω=W)
+		elseif typeof(rfit)<:StatsModels.TableRegressionModel
+			predict(rfit, df, interval = :confidence, level = lev)
+		else
+			@error("Argument rfit must be ::LsqFit.curve_fit or ::GLM.lm")
+		end
+		
+		#return DataFrames.transform(garbage, names(garbage)=>ByRow((m,lo,hi)->[m-lo,hi-m])=>[:lower, :upper])
+		return garbage
 	end
-	#var_co = Symbol(var,:_co)
-	#var_de = Symbol(var,:_de)
-	#tmdf = rename(mdf, Dict(var_co => :Y_co, var_de => :Y_de))
-	f_co = lm(@formula(Y_co ~ winter), tmdf)
-	f_de = lm(@formula(Y_de ~ winter), tmdf)
-	tmdf[!,:lin_co] = predict(f_co)
-	tmdf[!,:lin_de] = predict(f_de)
-	tmdf[!,:coef_co] .= coef(f_co)[2]
-	tmdf[!,:coef_de] .= coef(f_de)[2]
-	tmdf[!,:hig_co] .= confint(f_co)[end,2]
-	tmdf[!,:low_co] .= confint(f_co)[end,1]
-	tmdf[!,:hig_de] .= confint(f_de)[end,2]
-	tmdf[!,:low_de] .= confint(f_de)[end,1]
-	return tmdf #rename(tmdf,  Dict(:Y_co=>var_co, :Y_de=>var_de))
+
+	
+	# =====
+	# Looping over all function of the statistics to use:
+	foreach(fkey) do (k, 𝑓) 
+		println("worinking on ", k, ":")
+		foreach([:H=>-1, :L=>1]) do (px,pz)
+		tmdf = groupby(newDB, :winter) |> d->combine(d) do df
+			isempty(df) && println(df.winter)
+				Y_co = filter(d->d.coupled==(true) && d.paₓ==(pz), df) |> x-> 𝑓(x.Y_var)
+				Y_de = filter(d->d.coupled==(false) && d.paₓ==(pz), df) |> x-> 𝑓(x.Y_var)
+				(Y_co = Y_co[1], ϵ_co = Y_co[2], Y_de = Y_de[1], ϵ_de = Y_de[2])
+		end
+		
+		# moving average for the coupled/decoupled time series Y_var ~ winter		
+		tmdf[!, :S_co] = CLIMA.ave_window(tmdf.Y_co; w=window, edges=edges)
+		tmdf[!, :S_de] = CLIMA.ave_window(tmdf.Y_de; w=window, edges=edges)
+		
+		# Defining the weights for coupled/decoupled time series based on winter's standard deviation:
+		scale_it(E,M) = (typeof(E)<:Tuple ? mean(E) : E)/M |> x->ifelse(isnan(x), 0, x)
+		function weight_it(err)
+			sig_err = [(typeof(E)<:Tuple ? mean(E) : E)^2 for E in err] .|> inv
+			iout = @. isnan(sig_err) || ~isfinite(sig_err)
+			tot_err = all(iout) ? 1.0 : mean(sig_err[.~iout])
+			sig_err[iout] .= tot_err
+			
+			return sig_err./tot_err
+		end
+		
+		ω_co = AnalyticWeights( weight_it(tmdf.ϵ_co)) #(@. abs(1 - scale_it(tmdf.ϵ_co, tmdf.Y_co)^2 ) )
+		ω_de = AnalyticWeights( weight_it(tmdf.ϵ_de)) #@. abs(1 - scale_it(tmdf.ϵ_de, tmdf.Y_de)^2 ) )
+		
+		# Fitting the smoothed time series to yₜ :
+		f_co = filter(d->!isnan(d.S_co), tmdf) |> df-> curve_fit(𝑦ₜ, df.winter, df.S_co, ω_co, [10, 0.5]) #
+		f_de = filter(d->!isnan(d.S_de), tmdf) |> df-> curve_fit(𝑦ₜ, df.winter, df.S_de, ω_de, [10, 0.5]) #
+		
+		#f_co = filter(d->!isnan(d.S_co), tmdf) |> df-> lm(@formula(S_co ~ winter), df; wts=ω_co)
+		#f_de = filter(d->!isnan(d.S_de), tmdf) |> df-> lm(@formula(S_de ~ winter), df; wts=ω_de)
+
+		# Assigning rfit
+		rfits[:co][k][px] = f_co
+		rfits[:de][k][px] = f_de
+		
+		# For coupled
+		tmdf = hcat(tmdf, pred_low_hig(tmdf.winter, tmdf.Y_co, f_co, ω_co) |> x->rename(x, [:lin_co, :err_co]) )
+		# For decoupled
+		tmdf = hcat(tmdf, pred_low_hig(tmdf.winter, tmdf.Y_de, f_de, ω_de) |> x->rename(x, [:lin_de, :err_de]) )
+			
+		dffit[k][px] = tmdf
+		end
+	end
+	
+	return dffit, rfits #tmdf, coeff_co, coeff_de, Dict(:co=>f_co, :de=>f_de)
+	
 end
+
+# ╔═╡ 76063b20-0848-4fd3-9e53-d76149d3d115
+mdf, rfits = let var=varva
+	low_threshold = 0.0 # var==:Tskin ? 1.5*var_meta[var].lim[1] : 0.0
+    newDB = filter(d->d[var]>(low_threshold) && (siclim[1] < d.μSIC ≤ siclim[2]), DB)
+    rename!(newDB, Dict(var=>:Y_var))
+	# computing the data fitting using running window average method:
+	co_de_fit(newDB; fitmodel=true, window=7, edges=true)
+end;
+
+# ╔═╡ fb63d204-e954-4813-bdc5-b02b67c080c5
+let df=DataFrame(x=mdf[:q50][paxva].winter, y=mdf[:q50][paxva].S_de, Y=mdf[:q50][paxva].Y_de, e=mdf[:q50][paxva].ϵ_de)
+	#(x=(1:12),y= 20.1 .+ 0.86*(1:12) .+0.8randn(12), e=rand(12))
+	
+	lev = 0.95
+	mfit = lm(@formula(y ~ x), df)
+	println("type of lm fit: ", typeof(mfit)<:StatsModels.TableRegressionModel)
+	R_cholU = [1.6248076809271923 0.0; 3.059411708155671 25.495097567963924]
+	n = length(df.x)
+	newx = [ones(n) df.x]
+	
+	chol = cholesky!(mfit.model.pp)
+	print("pp=", chol isa CholeskyPivoted, " ")
+	ip = invperm(chol.p)
+    chol.U[ip, ip] |> println
+
+	p = coef(mfit)
+	lmint = confint(mfit, level=lev)
+	println("lm CI:", lmint)
+	
+
+	garbage = predict(mfit, df, level=lev, interval=:confidence) #DataFrame(prediction=
+	insertcols!(garbage, 1, :x=>df.x)
+
+	garbage[!, :lm] = newx*p #f(df.x, p)
+
+	#println("pp=",cholesky!(mfit.model.pp).U)
+	println(mfit)
+	
+	residvar = ones(size(newx,2)) * deviance(mfit)/dof_residual(mfit)
+	retvariance = (newx/R_cholU).^2 * residvar
+	retinterval = quantile(TDist(dof_residual(mfit)), (1. - lev)/2)*sqrt.(retvariance)
+	println("retinterval", retinterval, "  residvar", residvar)
+	garbage[!, :lm_lo] = garbage.lm .- retinterval
+	garbage[!, :lm_up] = garbage.lm .+ retinterval
+	#garbage[!, :lm_21] = newx*[lmint[1,2], lmint[2,1]] |> vec #maximum([tl bl], dims=2) |> vec #.-  garbage.lm 
+	#garbage[!, :lm_22] = newx*[p[1], lmint[2,2]] |> vec #minimum([tl bl], dims=2) |> vec #garbage.lm .- 
+
+	# For curve_fit
+	f(x,p) = @. p[1] + p[2]*x
+	
+	wwe = inv.(df.e.^2) |> w->w./mean(w)
+	cfit = curve_fit(f, df.x, df.y, wwe, [1,0.5]) # inv.(df.e.^2).*df.Y, 
+	println("type of curve_fit: ", typeof(cfit)<:LsqFit.LsqFitResult)
+	cint = confidence_interval(cfit, 0.95)
+	cresvar = ones(size(newx,2)) * sum(cfit.resid.^2)/dof(cfit)
+	cretvariance = (newx/R_cholU).^2 * cresvar
+	cretinterval = quantile(TDist(dof(cfit)), (1. - lev)/2)*sqrt.(cretvariance)
+	
+	#print("  curve_fit residvar=", cresvar)
+	
+	m = f(df.x, cfit.param)
+	
+	cstd = stderror(cfit)
+	println("coef=",cfit.param, "err=", cstd, "cint=", cint)
+	
+	garbage[!, :cfit] = m
+	garbage[!, :cfit_lo] = m .+ cretinterval #f(df.x, cfit.param .- cstd)
+	garbage[!, :cfit_up] = m .- cretinterval #f(df.x, cfit.param .+ cstd)
+	
+	qq = predict_curve_fit(df.x, cfit)
+	println(qq)
+	@df df scatter(:x, :Y, label="data", mc=:gray) # yerror=:e,
+	@df garbage plot!(df.x, :prediction, ribbon=(:prediction .- :lower, :upper .- :prediction), fillalpha=0.2, lc=:blue, fillcolor=:blue, label=round(10p[2], digits=3))
+	#@df garbage plot!(df.x, :lm, ribbon=(:lm_lo, :lm_up), fillalpha=0.2, lc=:green, fillcolor=:green)
+	#:cfit],   (:cfit_lo, :cfit_up)], fillalpha=0.2, linecolor=[:blue :green :red], fillcolor=[:blue :green :red])
+	@df qq plot!(df.x, m, ribbon=:sig_ci, label="predic_") # [m.+:lower m.-:upper])
+	#@df mdf[:q50][:H] plot!(:winter, :lin_de, ribbon=:err_de, label=round(10rfits[:de][:q50][:H].param[2], digits=3))
+end
+
+# ╔═╡ 73f5e706-d9c4-4d3e-b9bd-cd24c1b29dba
+# here loop over rfits[c][k][pa] where c is (:co, :de), k is (:q50, :μ, ...), and pa is (:H, :L) then Vpa is the LsqFit model to use:
+ravstat= [DataFrame((:type , :hat, :sig, :CI95, :pval, :snr, :chi², :r², :rmse, :coupled, :pax) .=> [k, values(t_test4model(mdf[k][pa].winter, mdf[k][pa][:, Symbol(:Y_, c)], mdf[k][pa][:, Symbol(:ϵ_, c)], Vpa, 𝑦ₜ))... , c, pa]) for (c,F) in rfits for (k,v) in F for (pa,Vpa) in v] |> D->reduce(vcat, D, cols=:union)
 
 # ╔═╡ 6d4a626d-69a3-4538-8d6e-30e22a3e51ed
 begin
-	lwpts = let var=:σSIC
+	lwpts = let var=:T2m
 		fk=1; fb=0 #-273.15;
 		
-		newDB = rename(filter(d->!isnan(d[var]), DB), Dict(var=>:Y_var))  # && (d.aoₓ!=(0))
+		newDB = rename(filter(d->d[var]>var_meta[var].lim[1] && d.paₓ==1, DB), Dict(var=>:Y_var))  # && (d.aoₓ!=(0))
 		newDB[!, :Y_var] .*=fk
 		newDB[!, :Y_var] .+=fb
-		tmpplot = @df newDB groupedboxplot(:winter, :Y_var, group=:coupled, bar_width=0.5, outliers=false, notch=true, la=0.7, fillcolor=farben, fillalpha=0.7, label="", xtick=(jahren, strwinter), xrot=33, xlabel="Wintertime", ylabel=var_label[var]*" [$(var_unit[var])]", size=(950,550), left_margin=5Plots.mm, bottom_margin=7Plots.mm, tickdir=:out, yminorticks=true, guidefontsize=15, ytickfontsize=14, xtickfontsize=10, legendfontsize=12,
-		#ylim = (-35, 9),
+		tmpplot = @df newDB groupedboxplot(:winter, :Y_var, group=:coupled, whisker_range=0.5, bar_width=0.5, outliers=false, notch=true, la=0.7, fillcolor=farben, fillalpha=0.7, label="", xtick=(jahren, strwinter), xrot=33, xlabel="Wintertime", ylabel=var_meta[var].labe*" $(var_meta[var].unit)", size=(650,550), left_margin=5Plots.mm, bottom_margin=7Plots.mm, tickdir=:out, yminorticks=true, ytickfontsize=14, xtickfontsize=10, legendfontsize=12, guidefontsize=15, 
+		ylim = var_meta[var].lim,
 		);
 		# Calculating mean of LWP co & de:
-		mdf = co_de_fit(newDB)
-		
-		@df mdf plot!(tmpplot, :winter.+[-0.1 0 0.1 0], [:Y_de, :lin_de, :Y_co, :lin_co], plot=[:scatter :line], m=[:^ :none :o :none], lc=[false farben[1] false farben[2]], lw=[0 2], ms=4, markerstrokewidth=1, mc=reshape(repeat(farben,2),1,4), 
-		legend=false, #:topleft,
-		label=["(de)   "*var_lege[var] @sprintf("%+3.1f %s/yr @CI₉₅ [%+3.1f %3.1f]", last(:coef_de), var_unit[var], last(:low_de), last(:hig_de)) "(co)   "*var_lege[var] @sprintf("%+3.1f %s/yr @CI₉₅ [%+3.1f %3.1f]", last(:coef_co), var_unit[var], last(:low_co), last(:hig_co))], dpi=400)
+		#mdf, rfits = co_de_fit(newDB)
+		coeff_co, coeff_de  = let subdf = filter(d->d.type==:μ && d.pax==:L, ravstat)
+			dfco = filter(d->d.coupled==:co, subdf)
+			dfde = filter(d->d.coupled==:de, subdf)
+			(dfco.hat[1], dfco.CI95[1]...), (dfde.hat[1], dfde.CI95[1]...)
+		end
+		#@df mdf[:olr] scatter!(tmpplot, :winter.+[-0.1 0.1], [:Y_de :Y_co], mc=farben, label=false, m=:square) 
+		@df mdf[:μ][:L] plot!(tmpplot, :winter.+[-0.1 0 0.1 0], [:Y_de :lin_de :Y_co :lin_co], seriestype=[:scatter :line],
+		ribbon=[:err_de :err_co], fillcolor=[false farben[1] false farben[2]], fillalpha=0.3,
+		m=[:^ :none :o :none], lc=[false farben[1] false farben[2]], lw=[0 2], ms=4, markerstrokewidth=1, mc=reshape(repeat(farben,2),1,4), 
+		legend=:topleft,
+		label=["(de)   "*var_meta[var].lege @sprintf("%+3.1f %s/yr @CI₉₅ [%+3.1f %3.1f]", coeff_de[1], var_meta[var].unit, coeff_de[2], coeff_de[3]) "(co)   "*var_meta[var].lege @sprintf("%+3.1f %s/yr @CI₉₅ [%+3.1f %3.1f]", coeff_co[1], var_meta[var].unit, coeff_co[2], coeff_co[3])], dpi=400)
 		tmpplot
 	end
 end
 
-# ╔═╡ acb055d8-44b0-45f9-989c-0e33fa8f86d5
-@df filter(d->d.σSIC>(0), DB) groupedboxplot(:winter, :σSIC./(:μSIC), group=:coupled, outliers=false, color=farben)
-
 # ╔═╡ 2cc166c0-464b-41a4-be91-44d936f1eedf
-@df filter(d->!isnan(d.lwp) && d.paₓ==(-0), DB) groupedboxplot(:winter, :lwp, group=:coupled, bar_width=0.4, outliers=false, fillcolor=farben, label=["de" "co"], xtick=jahren, ylabel="LWP [g m⁻²]", size=(850,400), left_margin=3Plots.mm, title="Pressure level L")
+@df filter(d->!isnan(d.lwp) && d.Tskin>(-100), DB) groupedboxplot(:winter, :Tskin, group=:paₓ, bar_width=0.4, outliers=false, fillcolor=farben, label=["de" "co"], xtick=jahren, ylabel="LWP [g m⁻²]", size=(850,400), left_margin=3Plots.mm, title="Pressure level L")
 
 # ╔═╡ 4a5f18c6-3c6a-40f5-ad18-d1c46048ed3d
 # ICE WATER PATH
 
 # ╔═╡ c1c5b1ac-fd5c-4734-aa9a-cfc18b640eea
-@df filter(d->!isnan(d.iwp) && d.aoₓ==(-1), DB) groupedboxplot(:winter, :iwp, group=:coupled, bar_width=0.4, outliers=false, fillcolor=farben, label=["de" "co"], xtick=jahren, ylabel="IWP [g m⁻²]", size=(850,400), left_margin=3Plots.mm, title="AO index -")
+@df filter(d->!isnan(d.iwp), DB) groupedboxplot(:winter, :iwp, group=:coupled, bar_width=0.4, outliers=false, fillcolor=farben, label=["de" "co"], xtick=jahren, ylabel="IWP [g m⁻²]", size=(850,400), left_margin=3Plots.mm, title="AO index -")
 
 # ╔═╡ 9a86e6d3-9e4c-4d14-b53f-81aba7e0e362
-@df filter(d->!isnan(d.iwp) && d.paₓ==(-1), DB) groupedboxplot(:winter, :iwp, group=:coupled, bar_width=0.4, outliers=false, fillcolor=farben, label=["de" "co"], xtick=jahren, ylabel="IWP [g m⁻²]", size=(850,400), left_margin=3Plots.mm, title="Pressure level L")
+@df filter(d->!isnan(d.σSIC), DB) groupedboxplot(:winter, :σSIC, group=:paₓ, bar_width=0.4, outliers=false, fillcolor=farben, xtick=jahren, ylabel="IWP [g m⁻²]", size=(850,400), left_margin=3Plots.mm, title="Pressure level L") #; hline!([-2 2])
 
 # ╔═╡ da33cd4a-7eec-4437-b31e-eabd91f5a8ae
-# SEA ICE CONCENTRAION
+md"""
+## Time series Sea Ice concentration around NSA 50 km radius
+"""
 
 # ╔═╡ 4c56ee27-9a31-47e7-9959-05c342b0c4d2
 begin
 	let var=:AμSIC
-	pltsic = @df filter(d->d.μSIC>(0) .&& d.coupled==true, DB) violin((:winter).+.015, :μSIC, outliers=false, side=:right, label="co", xtick=(jahren, strwinter), xrot=35, bandwidth=3)
-	@df filter(d->d.μSIC>(0) .&& d.coupled==false, DB) violin!((:winter).-.015, :μSIC, outliers=false, side=:left, label="de", xtick=(jahren, strwinter), xrot=30, xlabel="Wintertime", ylabel=var_label[var]*"  [$(var_unit[var])]", xtickfontsize=9, ytickfontsize=14, guidefontsize=14, size=(850,400), left_margin=3Plots.mm, legend=false, bandwidth=3, left_margins=3Plots.mm, bottom_margins=5Plots.mm)
+		BW = 7
+		pltsic = @df filter(d->d.AμSIC≥(0), DB) violin((:winter).-.015, :AμSIC, side=:left, label="\$\\oslash\$ 50km", xtick=(jahren, strwinter), xrot=35, bandwidth=BW, trim=false, lw=0, color=:gray)
+		
+		@df filter(d->d.μSIC≥(0), DB) violin!((:winter).+.015, :μSIC, side=:right, bandwidth=BW, trim=false, lw=0, color=:navy, label="\$ f(\\mathrm{WVT})\$", xtick=(jahren, strwinter), xrot=30, xlabel="Wintertime", ylabel="<SIC>  [$(var_meta[var].unit)]", xtickfontsize=9, ylim=(0, 100), ytickfontsize=14, minorticks=true, tickdir=:out, box=true, legend=:right, guidefontsize=14, size=(850,400), dpi=600, left_margin=3Plots.mm, bottom_margins=5.5Plots.mm)
 	pltsic
 	end
 end
@@ -713,31 +1388,631 @@ end
 tt = heatmap(repeat(vec([NNlim...]),1,2), color=NNcol, clim=NNlim, colorbar_scale=:log10, #colorbar_title=" No. occurence", 
 colorbar_titlefontsize=15, tickfontsize=13, colorbar_tickswidth=4, xlim=(-4,-1), framestyle=:none, top_margins=1.5Plots.mm)
 
-# ╔═╡ 60b8b0bb-f8de-49b5-98f3-1b6c26453344
-@df filter(c->c.aoₓ==(-1), DB) histogram(:wvtdir, group=:coupled, nbins=40, normalize=:probability, label=["deco" "co"], xlabel="wind dir at max WVT", ylabel="PDF", lw=[1 3], color=farben, xminorticks=true, xtickdir=:out, fillalpha=0.5)
+# ╔═╡ 93fbf31a-333b-4ce1-b4ec-e601146be8e2
+md"""
+## Time series for meteorological and climatological variables:
+"""
 
-# ╔═╡ 0a29cbe6-603c-4749-acb5-a0fb42c3eb7b
-@df dat scatter(:sic_bin, [:μSIClwp :μSICiwp], group=:coupled, marker=[:circle :star :circle :star], color=[farben[1] farben[1] farben[2] farben[2]]); plot!([0:5:100], x->fₛ(x, rfit[:μSIClwp].param), label="fit LWP"); plot!([0:5:100], x->fₛ(x, rfit[:μSICiwp].param), label="fit IWP")
+# ╔═╡ 1d4fc3cc-d3c3-4b98-8b01-fd99a986a766
+"""
+Function to add ```:we``` to DataFrame including the fraction of the week to wintertime.
+The value of ```:we``` will be then ```:winter+week(yy)/Δw``` where ```yy``` is the year and ```Δw``` id the period of winter time. By default the period is from Nov 1st to Apr 30th.
 
-# ╔═╡ 5c3d36a8-7982-41e3-8bc0-e36734e6ed0d
-Pahist =@df filter(D->!isnan(D.Pa), DB) groupedhist(:Pa, group=:aoₓ, bins=(98:0.25:106), bar_position=:stack, xlim=(97, 107), fillalpha=[0.3 0.5 0.9], xlabel="", ylabel="# of occurance", title="Years 2012 to 2022", label=["AOi < -1" "-1 ≤ AOi ≤ 1" "AOi > 1"])
+```julia-repl
+julia> add_week_winter!(df)
+julia> add_week_winter!(df; T0=Date(2012,11), Tf=Date(2013,04,30))
+```
+with ```T0``` and ```Tf``` indicating the starting and final Date of the dataset to be considered.
+"""
+function add_week_winter!(df::DataFrame; T0=Date(2012,11), Tf=Date(2013,04,30))
+	w0 = week(T0)
+	wf = week(Tf)
+	Δw = w0 - wf
+	w = week.(df.date)
+	"winter" ∉ names(df) && add_winter!(df)
+	insertcols!(df, 2, :we => @. df[:, :winter] + round((ifelse(w<w0, 51. + w, w) - 44.)/Δw, digits=3) )
+	#df[:, :we] = 
+	return nothing
+end
 
-# ╔═╡ b9b953ef-6ed2-4128-b234-8cf5e50be7dc
-Pabxplt=@df filter(D->!isnan(D.Pa), DBraw) groupedboxplot(:aoₓ, :Pa, group=:aoₓ, box_width=2.8, outliers=false, orientation=:h, legend=false,  ylabel="AOi", yticks=([-1,0,1], ["<-1","-1 … 1",">1"]), xlabel="Surface Pressure [kPa]", xlim=(97, 107), fillalpha=[0.3 0.5 0.9])
+# ╔═╡ 2f35259b-b297-4e2f-a535-7d48d0d01873
+"""
+Function to convert a DataFrame and make the data weekly median values, with added running average.
 
-# ╔═╡ c9bbb25e-7f3a-4218-8ab0-46fb0f83637f
-plot(Pahist, Pabxplt, layout=@layout([b;a{0.35h}]))
+```julia-repl
+julia> WeDF = make_it_weekly(df::DataFrame, vars::Vector{Symbol}; rename_it=[:idx=>:enso], nanrow=true)
+julia> WeDF = make_it_weekly(df::DataFrame, vars::Vector{Symbol}; nanrow=true, W=6)
+```
+Output is the ```df::DataFrame``` but reduced to weekly values ```WeDF::DataFrame```.
+Optional input arguments:
+```nanrow::Bool``` if true then add a NaN row at the final of the continues winter period (default true).
+```W::Numeric``` the running average window in number of data points (default w=4)
+```rename_it::Vector{Tuple(Symbol, Symbol)}``` to rename the variable names e.g. [:idx=>:enso, :aoi=>:AOi]
+"""
+function make_it_weekly(dt::DataFrame, vars::Vector{Symbol}; rename_it=[], nanrow=true, W=4)
+	Nvars = length(vars)
+	tmp = combine(groupby(filter(d->d.winter≠0, dt), [:we, :winter]),
+		vars .=> x->Nlu(x, stats=:median)[1], renamecols=false)
+	
+	# running average with windows w=4 over variables:
+	transform!(groupby(tmp, :winter), vars .=> x->CLIMA.ave_window(Vector(x); w=W))
+
+	# if rename_it has the type [:idx=>:aoi] then it will rename the dataframe column :idx to :aoi
+	if !isempty(rename_it)
+		vars_tmp = [Symbol(k,"_function")=>Symbol(v,"_function") for (k,v) in rename_it]
+		rename_it = vcat(rename_it, vars_tmp)
+		rename!(tmp, rename_it...)
+	end
+	
+	# adding a NaN row when weeks has a jump, i.e. from Apr 30th to Nov 1st:
+	if nanrow
+		inan = findall(>(0), diff(tmp.winter))
+		foreach(i->insert!(tmp, i+1, (tmp.winter[i]+0.99, tmp.winter[2], fill(NaN, 2Nvars)...)) , inan)
+	end
+	return tmp
+end
+
+# ╔═╡ ac5548e8-093b-496e-b742-eb12f0588a6c
+# Loading database for PDO index: pdo_index.json or  ersst.v5.pdo.dat
+pdo = let dt=CLIMA.load_climate_index("/home/psgarfias/Downloads/pdo_index.json"; Tlim=(DateTime(1990,1), DateTime(2025,03)));
+	add_week_winter!(dt)
+	dt
+end;
+
+# ╔═╡ ac0eafdc-8b05-480a-ac82-4b7a9bdf4530
+# Loading database for ENSO index: enso_index.json or enso_index.json
+enso = let dt=CLIMA.load_climate_index("/home/psgarfias/Downloads/enso_index.json"; Tlim=(DateTime(1990,1), DateTime(2025,03)));
+	add_week_winter!(dt)
+	dt
+end;
+
+# ╔═╡ 4cf8a75a-9838-4049-90ee-92028f9cf545
+# Loading database for Arctic Oscilation index: 
+# 
+aoi = let df=CLIMA.load_climate_index("https://ftp.cpc.ncep.noaa.gov/cwlinks/norm.daily.ao.cdas.z1000.19500101_current.csv"; Tlim=(DateTime(1990,1), DateTime(2025,03)));
+	#filter!(d->month(d.date) ∈ [11,12,1,2,3,4], df)
+	add_week_winter!(df)
+	df
+end;
+
+# ╔═╡ 3766c2a6-4540-485a-b98d-07622c1f159b
+# Merging datasets for time-series plot:
+begin
+	vars = [:T2m, :Pa, :AμSIC, :AσSIC, :paₓ]
+	Nvars = length(vars)
+	
+	dfts = let dt = DBraw[:, [:date, vars...]] 
+		add_week_winter!(dt)
+		dt[:, :T2m] .-= 273.15
+
+		# weekly average all quantities in 'vars':
+		tmpL = make_it_weekly(dt, vars)
+
+		# Adding the AOi climate index:
+		tmpR = make_it_weekly(aoi, [:idx]; rename_it=[:idx=>:aoi])
+		tmpL = outerjoin(tmpL, tmpR, on=[:we, :winter]) |> d->sort(d, :we)
+		
+		# Adding the ENSO climate variables index:
+		tmpR = make_it_weekly(enso, [:idx]; rename_it=[:idx=>:enso], W=8)
+		tmpL = outerjoin(tmpL, tmpR, on=[:we, :winter]) |> d->sort(d, :we)
+
+		# Adding the PDO climate variables index:
+		tmpR = make_it_weekly(pdo, [:idx]; rename_it=[:idx=>:pdo], W=8)
+		outerjoin(tmpL, tmpR, on=[:we, :winter]) |> d->sort(d, :we)
+	end	
+end;
+
+# ╔═╡ 2385ec55-60b2-44df-8c6f-a4de7f6da443
+let df=dfts
+	gr_vars = [:T2m, :Pa, :AμSIC, :AσSIC, :enso, :pdo] #
+	
+	nn = length(gr_vars) #-3 Nvars-1  # -1 because paₓ is not plotted.
+	xwinter = (2011:2024)
+	HLcolor = cgrad(:roma, 2, categorical=true)
+	met = []
+	label_letter = 'a'
+	for vv in gr_vars
+	 	
+	 	vv == :paₓ && continue
+	 	
+		kakes = select(df, [:we, vv, :paₓ, Symbol(vv, "_function")] .=> [:we, :var, :pa, :rav])
+		
+		yylims = let tt = extrema(filter(!isnan, skipmissing(kakes.var)))
+			dtt = diff([tt...,]).*(-0.03, +0.03)
+			dtt .+= tt
+		end
+				
+		# adding to the plot vertical lines to indicate the initial of wintertime:
+		tmp = vline([xwinter...], lc=:gray, ls=:dash, label="")
+	 	any(vv ∈ (:enso, :pdo, :aoi)) && hline!(tmp, [0], lc=:gray, ls=:dash, label="")
+
+		# plotting the scattered data symbol colored by H- and L-pressure:
+		@df kakes scatter!(:we, :var, markersize=3, markerstrokewidth=0, markeralpha=0.4,
+			zcolor=replace(:pa, missing=>NaN), color=HLcolor, clim=(-1,1), label="", 
+			ylabel=var_meta[vv].labe*" [$(var_meta[vv].unit)]",
+			yguidefontsize=11, ytickfontsize=11, colorbar=false,
+			#ann=(2013, maximum(skipmissing(:var)), "($(label_letter))"),
+		)
+		label_letter +=1  # adding the label letter for the next plot
+		
+		# adding the running average of variables on top as time series:
+		@df dropmissing(kakes, :rav) plot!(tmp, :we, :rav,
+			lw=1, lc=:black,
+			xticks=(xwinter, ""), xlim=(2010.9, 2025.), ylim=yylims, 
+			tickdir=:out, label="", bottom_margins=-4Plots.mm)
+		
+		# collecting each plot for variable into met[]:
+	 	push!(met, tmp)
+		
+	 	# adding BoxPlots to the right of the time series for L and H-pressure:	 && !ismissing(d.pa) 
+		tmp = @df filter(d->!isnan(d.var) && d.pa≠(0), dropmissing(kakes)) groupedboxplot(:pa, :var,
+			group=:pa, outliers=false, notch=true, wister_width=:half, bar_width=3, 
+			label="", fillcolor=[HLcolor[1] HLcolor[2]], fillalpha=0.4, 
+			xticks=([-1.5,1.5],["H","L"]), xlim=(-4,4), 
+			ylim=yylims, ymirror=true, ytickfontsize=11, yguideposition=:right, 
+			tickdir=:out, left_margins=-7Plots.mm, bottom_margins=-4Plots.mm)
+		
+	 	push!(met, tmp)
+	 end
+	plot!(met[2nn-1], xticks=(xwinter, strwinter), xrot=30, bottom_margins=+1.5Plots.mm)
+	
+	plot(met..., layout=grid(nn,2, widths=(.85,.15)), size=(800,700))
+	#savefig("/home/psgarfias/Downloads/quicklooks/nsa/TimeSeries_$(wintertime)_clima.png")
+end
+
+# ╔═╡ 06311e0c-129d-4485-8599-70e89c4806e0
+let tmp=groupby(DB, :winter)
+	plx = []
+	
+	Dsic = combine(tmp) do df
+		#p=density(filter(!isnan, df.AμSIC) , trim=true, bandwidth=3) #AμSIC
+		#nx = [p.series_list[1].plotattributes[:x]..., 100]
+		siclin = range(1,99,length=30)
+		s = StatsBase.fit(Histogram, filter(!isnan, df.μSIC), siclin) #|> StatsBase.normalize
+		
+		h = StatsBase.fit(Histogram, filter(!isnan, df.AμSIC), siclin) #
+		Nh = maximum(h.weights)
+		Ns = maximum(s.weights)
+		#h = StatsBase.normalize(h)
+		fNN(d) = [d..., NaN32] |> x->x/maximum(filter(!isnan,x))
+		
+		( x = h.edges[1], #[p.series_list[1].plotattributes[:x]..., 100],
+		 y = fNN(h.weights), #[p.series_list[1].plotattributes[:y]..., NaN32], |> d->d/maximum(d)
+		s = fNN(s.weights),
+		 Nh = fill(Nh, length(h.edges[1])),
+		Ns = fill(Ns, length(s.edges[1]))
+		)
+		
+	end
+	#print(ceil.(unique(Dsic.N)/1f3))
+	foreach([isodd, iseven]) do ff
+		
+		p1 = @df filter(d->ff(d.winter), Dsic) plot(:x, :winter .- [:y :s], seriestype=:step, lw=[1 2], fillalpha=[0.2 0.4], fillrange=:winter, label="", color=[:red :gray], yminorgrid=true, yaxis=:flip,
+		ygridalpha=0.7, ytickdir=:out, ytick=(unique(:winter), ""), ylabel=ff==isodd ? "Normalized distribution" : "",
+		#ytick=(unique(:winter), ["    $(w)" for w in strwinter if ff(parse(Int, w[1:4]))]), 
+		ann=(2, unique(:winter).-1.18, text.(["(20$(w))" for w in strwinter if ff(parse(Int, w[1:2]))], 8, :left)),
+		ylim=extrema(:winter).-[1.2, 0], yrot=90,
+		xlim=(0,100), xtickdir=:out, xminorgrid=true, xgridlinewidth=2, xgridlinestyle=:dash, xtickfontsize=12, xguidefontsize=14, xlabel="SIC [%]")
+		
+		let df = filter(d->ff(d.winter), Dsic)
+			dh = unique(df.Nh)
+			ds = unique(df.Ns)
+			
+			foreach(enumerate(zip(dh,ds))) do (i,tt)
+				annotate!(p1, -6, unique(df.winter)[i].-[0, 0.6, 1.2], text.(["0", "0.5", "1"], 7, :left))
+				annotate!(p1, 30, unique(df.winter)[i].-1.1, text(tt[1], 10, :left, :red))
+				annotate!(p1, 50, unique(df.winter)[i].-1.1, text(tt[2], 10, :left, :gray))
+			end
+		end
+		push!(plx, p1)
+	end
+	
+	plot(plx..., layout=(1,2), size=(700,600), right_margin=2Plots.mm)
+	#savefig("/home/psgarfias/Downloads/quicklooks/nsa/$(wintertime)_SIC_2hist.png")
+end
+
+# ╔═╡ 67552873-5276-4955-9dff-358eaf9c390a
+md"""
+### Calculating the FFT for climate variables and NSA observables:
+* First estimate the FFT frequencies for ENSO using all timeseries,
+* then plot only Wintertime data along with best fit,
+* plot frequencies for ENSO and NSA variables:
+"""
+
+# ╔═╡ 2d686363-8f9a-48dc-bfba-9535e7b73d70
+# combine(groupby(aoi, :winter), :idx=>mean, renamecols=false) |> df->filter(d->d.winter≠0, df) |> df-> 
+enso_fft = let df=enso
+    yfft = CLIMA.FourierFrequencies(df.date, df.idx; P=Year)
+    yfft
+end;
+
+# ╔═╡ 230869e6-0f06-4757-aac3-31dbf883f334
+md"""
+### Defining the free parameter Θₚ to consider as frequency of signal oscilation: e.g. ENSO periods Pₖ:
+$(Θₚ = filter(k->k.YdBₖ≥18 && 2< k.Pₖ < 15, enso_fft) |> df->(νₖ=df.νₖ, Pₖ = round.(inv.(df.νₖ), digits=1)); )
+"""
+
+# ╔═╡ 82ccaaa0-f5d7-4c1f-93bc-37da45b2b048
+# Calculating Fitting parameters for every Climatological significant cycle (e.g. ENSO)
+# ====
+allwavstat, efits = let tmp=DataFrame[]
+	efit = Dict()
+#	#tmp = [enso_fit(mdf, var, cc, pax; fk=10) for cc in (:de, :co) for var in (:q50, :μ, :q25, :q75) for pax in (:H, :L)]
+	 for cc in (:de, :co)
+		 vardic = Dict() #cc=>
+		 for var in (:q50, :μ, :q25, :q75)
+			 !haskey(vardic, var) && (vardic[var]=Dict(:H=>[], :L=>[], :θ=>[]))
+			 for pax in (:H, :L)
+				 for (k, νₖ) ∈ enumerate(Θₚ.νₖ)
+					
+				 	pax==:H && push!(vardic[var][:θ], Θₚ.νₖ[k] )
+					 df, tmpdic = enso_fit(mdf, var, cc, pax; θ=νₖ, fk=10) #,  θ=θₖ[cc]
+	 				push!(vardic[var][pax], tmpdic)
+					 df[:, :θ] .= Θₚ.νₖ[k]
+				 	push!(tmp, df)
+					
+				 end
+#		 		#vardic[var]=Dict(pax=>ffit)
+	 		end
+	 	end
+		efit[cc]=vardic
+		
+	 end
+	reduce(vcat, tmp, cols=:union), efit
+end;
+
+# ╔═╡ 4cb72574-9b2a-4482-b12e-642eb137c0d1
+Lmin = filter(d->d.type==:q50, allwavstat) |> df->combine(groupby(df, [:pax, :coupled]), :cost =>argmin => :Kmin) |> df->transform(df, :Kmin => ByRow(i->Θₚ.νₖ[i]) => :θmin)
+
+# ╔═╡ cbeeec75-64bb-4507-aa33-df9b1b90cad1
+# selection of DataFrame containing only the ENSO/PDO frequency selected:
+wavstat = combine(groupby(allwavstat, [:pax, :coupled])) do Gdf 
+	pp, cc = (Gdf.pax[1], Gdf.coupled[1])
+	
+	Imin = filter(d->d.pax==pp && d.coupled==cc, Lmin).θmin[1]
+	filter(d->d.θ==Imin, Gdf)
+end;
+
+# ╔═╡ 55ea71af-8398-40bf-858d-1a039f20201f
+ let fmt = Printf.Format("%s_%s_SIC%03d-%03d.csv")
+  	dirfmt = Printf.Format("buffer_data/%s")
+  	dirout = Printf.format(dirfmt, varva)
+  	!isdir(dirout) && mkdir(dirout)
+  	ravpathout = joinpath(dirout, Printf.format(fmt, "moavstat", varva, (siclim==(0,100) ? (100,100) : siclim)...) )
+  	CSV.write(ravpathout, ravstat)
+  	wavpathout = joinpath(dirout, Printf.format(fmt, "ensostat", varva, (siclim==(0,100) ? (100,100) : siclim)...) )
+  	CSV.write(wavpathout, wavstat)
+ end
+
+# ╔═╡ a1941c4d-28f9-4f25-a3ad-350324003a33
+# Plotting the trend for different statistical variables, coupling and pressure systems:
+begin
+	ttplt=plot()
+	let xvarstr=[:q25, :μ, :q50, :q75]
+		xtikstr=["¹    ²\n"*L"Q_1", "¹    ²\n "*L"\overline{\mu}_g", "¹    ²\n "*L"\mu_{1/2}", "¹    ²\n "*L"Q_3"]
+		ragdf = groupby(ravstat, :pax)
+		wagdf = groupby(wavstat, :pax)
+		
+		invfarben = circshift(farben, (0,1))
+		for (i,df) in enumerate([ragdf[(pax=paxva,)], wagdf[(pax=paxva,)]])
+		
+		df = transform(df, :type =>ByRow(x-> findall(==(x), xvarstr)[1]-1/3+i/5) =>:xstr)
+			# plotting the statistically significant flag:
+			@df df scatter!(ttplt, :xstr, :hat, group=:coupled, m=[:o :^], mc=:gray, ma=ifelse.(:pval .<0.05, .5,0), ms=10, label=ifelse(i==1 && siclim==true, ["p<0.05" ""],"") )
+
+			# plotting the trend for both methods: 1) running average, 2) ENSO fit: (-first.(:CI95)+:hat, last.(:CI95)-:hat)
+			@df df scatter!(ttplt, :xstr, :hat, yerror=(:sig), group=:coupled, m=[:o :^], ms=5, mc=invfarben,lw=2, lc=invfarben, xtick=((1:4), xtikstr),
+			xlabel=ifelse(siclim[1]==0, "Statistic used for trend estimation",""), yminorticks=true, #ylim=ifelse(paxva==:L,(0,15),(-10,10)), 
+			ylabel=ifelse(paxva==:H, L"\frac{\Delta}{\Delta t}"*var_meta[varva].labe*" [$(var_meta[varva].unit) decade⁻¹]", ""), 
+			legendtitle=siclimstr, legendforegroundcolor=false, legendbackgroundcolor=false,
+				guidefontsize=13, tickfontsize=13, label=ifelse(i==1 && siclim==true, ["co ± σ" "de ± σ"],""), tickdir=:out, framestyle=:box, bottom_margin=5Plots.mm, top_margin=1Plots.mm, size=(450,300))
+			
+		end
+	end	
+	ttplt
+	#[findall(ravstat) for (ityp, typ) in enumerate(ravstat.type)]
+end
+
+# ╔═╡ 59a25151-b64c-44f5-b3a0-0ad7d5697fc8
+let Ldeco = filter(d->d.pax==paxva, Lmin) |> df->permutedims(select(df,[:coupled, :θmin]), 1)
+md"""
+Coupled period: $(@bind θcₖ Select(Θₚ.νₖ .=> Θₚ.Pₖ; default=Ldeco.co[1]))
+___ Decoupled period: $(@bind θdₖ Select(Θₚ.νₖ .=> Θₚ.Pₖ; default=Ldeco.de[1]))
+"""
+end
+
+# ╔═╡ e4ef2843-07dc-4f7f-ade6-acef5612cb52
+θₖ = Dict(:co=>θcₖ, :de=>θdₖ); println(θₖ)
+
+# ╔═╡ d2c0d96e-ead0-4ba2-adc0-585cf161bb64
+begin
+	# plotting scattering data for coupled and decoupled:
+	@df mdf[:q50][paxva] scatter(:winter .+[0.1 -0.1], [:Y_de :Y_co], yerror=[:ϵ_de :ϵ_co], mc=farben, lw=2, la=0.4, lc=farben,  marker=([:^ :o], stroke(0.01), 6), label=ifelse(siclim==(20,100), ["decoupled:  "*L"\mu_{1/2}\pm \sigma_{\textrm{mad}}" "coupled:   "*L"\mu_{1/2}\pm \sigma_{\textrm{mad}}"], ""),
+	legend_column=2, legendfontsize=10, legendforegroundcolor=false, legendbackgroundcolor=false, legend_position=:top, 
+	gridlinewidth=.5, frame=:box, tickdir=:out, yminorticks=true, ytickfontsize=12, yguidefontsize=14,
+	xtickfontsize=11, xguidefontsize=11, title=siclimstr*" & "*String(paxva)*"-pressure"
+	)
+
+	# Estimaint the limits for the Y-Axis based on the data and given lims in 'var_meta[].lim' variable:
+	yye_lims = extrema([var_meta[varva].lim..., extrema(mdf[:q50][paxva].Y_co)..., extrema(mdf[:q50][paxva].Y_de)...])
+	yye_lims = (yye_lims[1], yye_lims[2]*1.01)
+	# finding the index of frequency to show and getting curve fit parameters:
+		
+	efit_co, efit_de = let Ico = argmin(abs.(efits[:co][:q50][:θ] .- θₖ[:co]))
+		Ide = argmin(abs.(efits[:de][:q50][:θ] .- θₖ[:de]))
+		efits[:co][:q50][paxva][Ico], efits[:de][:q50][paxva][Ide]
+	end
+	βc = efit_co.param; #..., θₖ]
+	βd = efit_de.param; #..., θₖ]
+	# Calculating uncertainty region:
+	
+	# plotting the periodic fitted curve:
+	plot!(2011:0.2:2024, [w->𝑦ₛ(w, βd; νₛ=θₖ[:de]), w->𝑦ₛ(w, βc; νₛ=θₖ[:co])], lw=2, la=0.7, lc=farben, ls=:dash, label=get_trend_str(wavstat, varva, :q50, paxva; vargof=:chi2freq))
+	# plotting the trend line (2nd coefficient from fitted curve):
+	@df let w=mdf[:q50][paxva].winter
+		
+		n = length(w)
+		newx = w * [0 1]; newx[:,1].=1;
+		Ŷde = 𝑦ₜ(w, βd[1:2])
+		Ŷco = 𝑦ₜ(w, βc[1:2])
+		
+		ret_de = predict_curve_fit(w, efit_de) |> df->rename(df, [:lin_de, :err_de]) #, :up_de])
+		ret_co = predict_curve_fit(w, efit_co) |> df->rename(df, [:lin_co, :err_co]) #, :up_co])
+		hcat(DataFrame(winter=w), ret_de, ret_co)
+	end	plot!(:winter, [:lin_de :lin_co], ribbon=[:err_de :err_co], lc=farben, lw=2, la=0.9, ls=:solid, fillalpha=0.2, fillcolor=farben, label=get_trend_str(wavstat, varva, :q50, paxva),
+	xtick=(:winter,strwinter), xrot=30, xlabel = "Wintertime [+2000 year]",
+	#ylim=ifelse(varva != :Γ, yye_lims, (0, 10)),
+	#ylim=(100, 4500), yscale=:log10, # for Γ_cloud (0, 10) #yye_lims, 
+	ylabel = var_meta[varva].labe*" [$(var_meta[varva].unit)]", bottom_margins=+2Plots.mm, legend=(0.1, 0.96)) #
+	
+end
+
+# ╔═╡ 72d1dc70-cc6e-46b1-a9e5-1140a24cf6fc
+begin
+	kakesplot=[]
+	foreach(enumerate([:de, :co])) do (i, cc)
+		Vy = Symbol(:Y_, cc)
+		Verr = Symbol(:ϵ_, cc)
+		Vrng = !isempty(kakesplot) && yticks(kakesplot[end])[1][1] #range(yye_lims[1], step=5, stop= round(yye_lims[2]/5)*5) #..., length=7) .|> round
+		Anny = diff([yye_lims...,])[1]*0.03 + yye_lims[1]
+		
+		dat = rename(mdf[:q50][paxva], Vy=>:Yvar, Verr=>:Yerr)
+		tmp = @df dat scatter(:winter, :Yvar, yerror=:Yerr, mc=farben[i], lc=farben[i], lw=2, la=.7, #lc=farben[i],
+			marker=(ifelse(i==1, :^, :o), stroke(1.5), 6),
+			label=ifelse(siclim==(10,100), ifelse(i==1, "decoupled:  "*L"\mu_{1/2}\pm \sigma_{\textrm{mad}}", "coupled:   "*L"\mu_{1/2}\pm \sigma_{\textrm{mad}}"), ""),
+			title=ifelse(cc==:de, siclimstr*" &", String(paxva)*"-pressure"), title_position=ifelse(cc==:de, :right, :left),
+			legend_column=1, legendfontsize=11, legendforegroundcolor=false, legendbackgroundcolor=false, legend_position=:topleft,
+			gridlinewidth=.5, frame=:box, tickdir=:out, 
+			yminorticks=true, ytickfontsize=12, yguidefontsize=14, yticks=ifelse(i==1,:auto, (Vrng,"")),
+			ylims=ifelse(varva != :Γ, yye_lims, (0, 10)), # for Γ_cloud (0, 10) # yye_lims, 
+			xtickfontsize=9, xguidefontsize=11, left_margins=ifelse(i==1, +5, -3)Plots.mm	)
+			# 
+		# retrieving fitting parameters:
+		β = ifelse(i==1, efit_de.param, efit_co.param);
+		efit_ln = ifelse(i==1, efit_de, efit_co)
+		
+		# plotting the periodic fitted curve:
+		plot!(tmp, 2011:0.2:2024, w->𝑦ₛ(w, β; νₛ=θₖ[cc]), lw=2, la=0.7, lc=farben[i], ls=:dash, label=get_trend_str(wavstat, varva, :q50, paxva; vargof=:chi2freq)[i])
+
+		@df let w=mdf[:q50][paxva].winter
+			Y = ifelse(i==1, mdf[:q50][paxva].Y_de, mdf[:q50][paxva].Y_co)
+			n = length(w)
+			newx = w * [0 1]; newx[:,1].=1;
+			Ŷ = 𝑦ₜ(w, β[1:2])
+			
+			ret_ln = predict_curve_fit(w, efit_ln) |> df->rename(df, [:lin_y, :err_y])
+			
+			hcat(DataFrame(winter=w), ret_ln)
+		end plot!(tmp, :winter, :lin_y, ribbon=:err_y, lc=farben[i], lw=2, la=0.9, ls=:solid, fillalpha=0.2, fillcolor=farben[i], label=get_trend_str(wavstat, varva, :q50, paxva)[i], xtick=(:winter,strwinter),
+	xrot=30, xlabel = "Wintertime [+2000 year]",
+		yscale=ifelse(any(varva ∈ (:δₕ, :clb)), :log10, :identity), ylabel = ifelse(i==1, var_meta[varva].labe*" [$(var_meta[varva].unit)]", ""),
+		legend=(0.1, 0.95) ) # || varva==:δₕ ylims=(5, 4500), 
+		
+		push!(kakesplot, tmp)
+		# adding the plot to the mosaic final plot: ylim=yye_lims, 
+	end
+	plot(kakesplot..., layout=(1,2), size=(900,400), dpi=600, bottom_margins=6Plots.mm)
+end
+
+# ╔═╡ 53243445-6771-45bf-9b7e-4943cf8cef20
+let dfcode = filter(d->d.type==:q50 && d.pax==paxva, allwavstat)
+	invfarben=reverse(farben) # reshape(repeat(farben[j],3), 1,6)
+	Y_vals = (0:0.25:1.2)
+	scores_plt = []
+	foreach(enumerate([:de, :co])) do (j, cc)
+		tmp = @df filter(d->d.coupled==cc,dfcode) plot(:θ, [1 .- :r² :rmse :chi²], m=[:o :square :x], mc=farben[j], ms=[3 4 6], stroke=8, la=0.5, l=:dash, lc=farben[j], 
+		xlabel=ifelse(j==2, "Signal period νₖ⁻¹ [years]", ""), xticks=(:θ, ifelse(cc==:de, "", round.(inv.(:θ), digits=1))), xflip=true, 
+		yminorticks=true, 
+		label=["1 - r²" "nRMSE" "χ²" "" "" ""], tickdir=:out, legend=:outerleft, legend_title=cc, legendforegroundcolor=false, tickfontsize=11, guidefontsize=12,
+		title=ifelse(cc==:de, var_meta[varva].labe*": "*siclimstr*" & "*String(paxva)*"-pressure", ""),
+		bottom_margin=ifelse(cc==:de, -4Plots.mm, 0Plots.mm)
+		)
+		vline!(tmp, [θₖ[cc]], lc=farben[j], lw=5, la=0.4, yticks=Y_vals, ylim=(0, 1.25), label=false, frame=:box)
+		push!(scores_plt, tmp)
+	end
+	plot(scores_plt..., layout=(2,1), left_margins=-10Plots.mm)
+end
+
+# ╔═╡ fc318b5f-baa4-4683-a31e-c869543043e8
+pdo_fft = let df=pdo 
+    yfft = CLIMA.FourierFrequencies(df.date, df.idx; P=Year)
+    yfft
+end;
+
+# ╔═╡ 74657565-b504-4360-9073-3d67e7d52099
+aoi_fft = let df = filter(d->d.date>Date(1992,1), aoi)
+	yfft = CLIMA.FourierFrequencies(df.date, df.idx; P=Year)
+        yfft	
+end;
+
+# ╔═╡ 24d9a027-28f9-4eec-9be4-d6aba07ce202
+let allvars = (:aoi, :pdo, :enso)
+	winterplts=[]
+	winterts = []
+	for clivar in allvars
+	tmpdf=select(dfts,[:winter, clivar] .=> [:winter, :var])
+	filter!(d->!ismissing(d.var) && !isnan(d.var), tmpdf)
+	Wtoms = 26 # (DateTime(2001,4,30)-DateTime(2000,11,1))/Millisecond(Dates.toms(Week(1)))
+	fwedate(x) = modf(x) |> v->DateTime(last(v), 11,1) + Week(round(Wtoms*first(v)))
+	tmpdf = combine(groupby(tmpdf, :winter), :var => (x->Nlu(x; stats=:aritmetic)[1]), renamecols=false)
+	transform!(tmpdf, :winter => ByRow(fwedate) => :datum)
+	
+	
+	yfft = CLIMA.FourierFrequencies(tmpdf.datum, Float32.(tmpdf.var); P=Year) #bar(:νₖ, :Yfft, xticks=:Pₖ, xflip=true)
+	tsplt = @df tmpdf plot(:datum, :var, m=:o, xlim=(DateTime(2012,10), DateTime(2024,5)))
+		push!(winterts, tsplt)
+	psplt = @df filter(d->d.Pₖ>(1), yfft) bar(:νₖ, :Yₖ, bar_width=.001, fa=[1 0.5], fillcolor=[:grey :orange], xrot=45,
+	 	xticks=(:νₖ, @. Printf.format(Printf.Format("%3.1f"), :Pₖ)), xflip=true, xlim=(1/12, 1/2), label=String(clivar), legend=:left)
+		push!(winterplts, psplt)
+	end
+	plot(winterplts..., layout=(3,1))
+	
+end
+
+# ╔═╡ 3d57920f-b46e-4cf9-8c4d-0b1624a166dd
+let vars=Dict(:ENSO=>enso_fft, :AO=>aoi_fft, :PDO=>pdo_fft)
+	label_letter = 'a'
+	tmp = []
+	Plims = (1.3, 45)
+	foreach(vars) do (k,vv)
+		sub_df = filter(d->Plims[1]<d.Pₖ<Plims[2], vv)
+		xString_Ticks = if k==:ENSO
+			(sub_df.νₖ, @. Printf.format(Printf.Format("%3.1f"), sub_df.Pₖ))
+		else
+			(sub_df.νₖ, "")
+		end
+		pltj = @df sub_df plot(:νₖ, :Yₖ, seriestype=:stem, m=:+, lw=0.15(:Pₖ[1]), fillcolor=:grey,
+			xrot=45, xlim=(1/Plims[2], 1/Plims[1]), xticks=xString_Ticks, xflip=true, xtickdir=:out, xguidefontsize=12, xtickfontsize=10,
+			ylim=(0, 335), ytickdir=:out, yguidefontsize=12,
+			ann=(1/1.43, 290, "($(label_letter)) "*String(k)),
+			legend=false, top_margins=ifelse(label_letter=='a',0,-5)Plots.mm)
+		
+		k==:ENSO && scatter!(pltj, Θₚ.νₖ, [9], ms=5, m=:^, mc=:red, label="")
+		push!(tmp, pltj)
+		label_letter +=1
+	end
+	plot(tmp..., layout=grid(3,1), xlabel=["" "" "Signal period (νₖ⁻¹) [year]"], ylabel=["" "Power spectrum per Δνₖ" ""], bottom_margin=+3Plots.mm)
+	#savefig("/home/psgarfias/Downloads/quicklooks/nsa/ClimaIndex_FFT.png")
+end
+
+# ╔═╡ c35b719f-742b-4c85-b83d-71e6c98575cf
+let vvstats = (
+		T2m =Dict(:arg=>Dict(:stats=>:aritmetic,), :S=>1),
+		Γ = Dict(:arg=>Dict(:stats=>:aritmetic,), :S=>2),
+		δₕ = Dict(:arg=>Dict(:stats=>:median, :L=>0), :S=>3),
+		lwp = Dict(:arg=>Dict(:stats=>:median,), :S=>4),
+		iwp = Dict(:arg=>Dict(:stats=>:median,), :S=>5),
+		μSIC = Dict(:arg=>Dict(:stats=>:aritmetic, :L=>0, :U=>100), :S=>6)
+	)
+	vars = keys(vvstats) #(:T2m, :Γ, :δₕ, :lwp, :iwp, :μSIC)
+	
+	Wtoms = 26 # (DateTime(2001,4,30)-DateTime(2000,11,1))/Millisecond(Dates.toms(Week(1)))
+	fwedate(x) = modf(x) |> v->DateTime(last(v), 11,1) + Week(round(Wtoms*first(v)))
+	# coupled==ifelse(cc==:co, true, false), DB) #d.we≠0 &&
+	tmp = Dict(cc=>let df=filter(d-> d.paₓ==ifelse(cc==:H, -1, 1), DB)
+				
+		#Dict(vv=>combine(groupby(DB, :winter), vv => (x->Nlu(x; vvstats[vv]...)[1]) => :var) for vv in vars)
+		Dict(vv=>begin
+			tmpdf = combine(groupby(df, :winter), vv => (x->Nlu(x; vvstats[vv][:arg]...)[1]) => :var)
+			filter(d->!isnan(d.var), transform(tmpdf, :winter => ByRow(fwedate) => :datum))
+		end for vv in vars )
+		end
+	for cc in (:H, :L) ) #(:de, :co) )
+	
+	#ytp = Dict(cc=>Dict(vv=>CLIMA.FourierFrequencies(dd.datum, dd.var; P=Year) for (vv, dd) in tmp[cc]) for cc in (:de, :co) )
+
+	
+	ytp = Dict(vv=>let ttcat = DataFrame()
+		foreach(tmp) do (cc,dd)
+			
+			ytp0 = CLIMA.FourierFrequencies(dd[vv].datum, dd[vv].var; P=Year)
+			ytp0[:, :Δz] .= ifelse(cc==:H, -1, 1)
+			ttcat = vcat(ttcat, ytp0)
+		end
+		ttcat
+	end for vv in vars )
+		
+	HLcolor = cgrad(:roma, 2, categorical=true)
+	tmplt = []
+	labcha = 'a'
+	foreach(vars) do vv
+	  	kakes = plot()
+	  	
+	  	@df filter(d->d.νₖ≤(0.6), ytp[vv]) bar!(kakes, :νₖ .+ [-0.01ones(7)...,0.01ones(7)...], :Yₖ, bar_width=[0.012 0.012], group=:Δz,
+		lc=[HLcolor[1] HLcolor[2]], color=[HLcolor[1] HLcolor[2]], fillalpha=0.4,
+		xticks=(:νₖ, @. Printf.format(Printf.Format("%3.1f"), :Pₖ)), xflip=true, xrot=45, xlim=(0.01, 0.55),
+	  	ann=(0.35, maximum(:Yₖ), "($(labcha)) "*var_meta[vv].labe), label=ifelse(vv==:T2m, ["H" "L"], "") )
+	  	
+	  	push!(tmplt, kakes)
+		labcha +=1
+	  end
+	 plot(tmplt..., layout=grid(2,3), xlabel=["" "" "" "" "Signal period (νₖ⁻¹) [years]" ""], ylabel=["|FFT|² power stectrum [dB Δνₖ]" "" "" "|FFT|² power spectrum [dB Δνₖ]"  "" ""], guidefontvalign=[:bottom :top])
+end
+	#|> dd->plot(dd.winter, dd.var, marker=:o); plot!(2012:0.5:2024, T->cos(2π*enso_fft.νₖ[3]*T+1.9)) #
+
+# ╔═╡ 1cb9ec34-8474-4af3-8877-87b396262ccf
+begin
+	paₘ = 101.32 #filter(!isnan, DBraw.Pa) |> mean
+	taₘ = filter(!isnan, DBraw.T2m) |> mean
+    R =  287.05  # [J kg⁻¹ K⁻¹]  Specific gas constant
+    g₀ = 9.83  #[m s⁻²]
+    ΔZ(Tₐ, P) = R/g₀*(Tₐ)*log(paₘ/P)  # [m] +taₘ/2
+	Φ = [ΔZ(x, y) for x in (220:2:280), y in (95:110)]
+	heatmap((220:2:280), (95:110), Φ', color=:RdBu, clim=(-300,300)); vline!([taₘ]); hline!([paₘ])
+end
+
+# ╔═╡ 3b2571ec-9e79-42c6-bcc8-c8e395506e17
+begin
+	tmp=plot(); ccol=cgrad(:jet, 6)
+	[plot!(tmp, (88:117), ΔZ.(t, (88:117)), lc=ccol[k], label="$(t)") for (k,t) in enumerate(225:5:275)]
+	vline!(tmp,[paₘ], label=false, lc=:black); hline!([-50 50], l=:dash, lc=:black, label=false, xminorticks=true)
+end
+
+# ╔═╡ 98df9486-a69b-4280-ba6c-2b12106b989d
+groupby(DBraw, :coupled) |> gf->combine(gf) do df
+	pa=filter(!isnan, df.Pa)
+	dz=filter(!isnan, df.ΔZ) 
+	(Pa=quantile(pa, (.25, .5, .75)), Dz=quantile(dz, (.25, .5, .75)), N=length(pa))
+end
+
+# ╔═╡ 45c00bda-bc4c-43fd-9976-897cad5fe77e
+@df filter(d->d.ΔZ>(-9999) && isfinite(d.ΔZ), DB) density(:ΔZ, group=:coupled, lc=farben, trim=true, xscale=:identity, label=["D"  "C"], xlim=(-300,300)) # ; vline!([-38 15.9 70.9 ])ΔZ xlim=(235,278), 
+
+# ╔═╡ dca14b2e-bb63-4f1d-97f5-ac221c40b62e
+let kakes = @df filter(d->!isnan(d.μSIC), DB) fit(Histogram, :μSIC, nbins=101)
+	sic_cdf = cumsum(kakes.weights)/sum(kakes.weights)
+	sic_xx = kakes.edges[1] #[1:end-1]
+	cdf_plt = plot(sic_xx[1:end-1], sic_cdf)
+	per = [.25, .5, .75, 1] #[0.16, 0.25, 0.5, 1]
+	idxii = [1]
+	foreach(enumerate(per)) do (j, pp)
+		ii = argmin(abs.(pp .- sic_cdf))
+		push!(idxii, ii)
+		println(pp, " $(sic_xx[idxii[end-1]]) - $(sic_xx[idxii[end]]) ", findall(sic_xx[idxii[end-1]] .< DB.μSIC .≤sic_xx[idxii[end]]) |> length )
+		vline!(cdf_plt, [sic_xx[ii]], label="$(pp) at $(sic_xx[ii])")
+		
+	end
+	cdf_plt
+end
+
+# ╔═╡ bcc0c25c-9f53-4dff-8da7-352a29a66852
+quantile(filter(!isnan, DB.μSIC), [.25, .5, .75]) #sum(kakes.weights)
+
+# ╔═╡ 0ba23046-f3b8-4c26-83d3-e06744c50587
+extrema(DB.date)
 
 # ╔═╡ 00000000-0000-0000-0000-000000000001
 PLUTO_PROJECT_TOML_CONTENTS = """
 [deps]
+ATMOStools = "f4bd9c7d-eeda-4f89-9af3-b8c6f828feac"
 CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
 DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
 Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
 Distributions = "31c24e10-a181-5473-b8eb-7969acd0382f"
 GLM = "38e38edf-8417-5370-95a0-9cbb8c7f171a"
-JLD2 = "033835bb-8acc-5ee8-8aae-3f567f8a3819"
+HypothesisTests = "09f84164-cd44-5f33-b23f-e6b0d136a0d5"
 LaTeXStrings = "b964fa9f-0449-5b57-a5c2-d3ea65f4040f"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 LsqFit = "2fda8390-95c7-5789-9bda-21331edee243"
 Plots = "91a5bcdd-55d7-5caf-9e0b-520d859cae80"
 PlutoUI = "7f904dfe-b85e-4ff6-b463-dae2292396a8"
@@ -748,25 +2023,34 @@ StatsBase = "2913bbd2-ae8a-5f71-8c99-4fb6c76f3a91"
 StatsPlots = "f3b207a7-027a-5e70-b257-86293d7955fd"
 
 [compat]
-CSV = "~0.10.8"
-DataFrames = "~1.6.1"
-Distributions = "~0.25.79"
-JLD2 = "~0.4.30"
-LaTeXStrings = "~1.3.0"
+ATMOStools = "~0.1.0"
+CSV = "~0.10.14"
+DataFrames = "~1.7.0"
+Distributions = "~0.25.108"
+GLM = "~1.9.0"
+HypothesisTests = "~0.11.2"
 LsqFit = "~0.15.0"
-Plots = "~1.39.0"
-PlutoUI = "~0.7.50"
-StatsBase = "~0.34.2"
-StatsPlots = "~0.15.4"
+Plots = "~1.40.4"
+PlutoUI = "~0.7.59"
+StatsBase = "~0.34.3"
+StatsPlots = "~0.15.7"
 """
 
 # ╔═╡ 00000000-0000-0000-0000-000000000002
 PLUTO_MANIFEST_TOML_CONTENTS = """
 # This file is machine-generated - editing it directly is not advised
 
-julia_version = "1.9.0"
+julia_version = "1.10.0"
 manifest_format = "2.0"
-project_hash = "d796d70c44234b20238a7210613d3847f05716f9"
+project_hash = "f823fb2db1be1a4024caabc5590afb57a39d860f"
+
+[[deps.ATMOStools]]
+deps = ["CSV", "DataFrames", "Dates", "FFTW", "HTTP", "JSON3", "Printf", "Statistics", "StatsBase", "Test"]
+git-tree-sha1 = "a496b2b9766c9e3f5dd97be26477f298829aa569"
+repo-rev = "main"
+repo-url = "git@github.com:pablosaa/ATMOStools.jl.git"
+uuid = "f4bd9c7d-eeda-4f89-9af3-b8c6f828feac"
+version = "0.1.0"
 
 [[deps.AbstractFFTs]]
 deps = ["LinearAlgebra"]
@@ -781,19 +2065,50 @@ weakdeps = ["ChainRulesCore", "Test"]
 
 [[deps.AbstractPlutoDingetjes]]
 deps = ["Pkg"]
-git-tree-sha1 = "91bd53c39b9cbfb5ef4b015e8b582d344532bd0a"
+git-tree-sha1 = "6e1d2a35f2f90a4bc7c2ed98079b2ba09c35b83a"
 uuid = "6e696c72-6542-2067-7265-42206c756150"
-version = "1.2.0"
+version = "1.3.2"
+
+[[deps.Accessors]]
+deps = ["CompositionsBase", "ConstructionBase", "InverseFunctions", "LinearAlgebra", "MacroTools", "Markdown"]
+git-tree-sha1 = "b392ede862e506d451fc1616e79aa6f4c673dab8"
+uuid = "7d9f7c33-5ae7-4f3b-8dc6-eff91059b697"
+version = "0.1.38"
+
+    [deps.Accessors.extensions]
+    AccessorsAxisKeysExt = "AxisKeys"
+    AccessorsDatesExt = "Dates"
+    AccessorsIntervalSetsExt = "IntervalSets"
+    AccessorsStaticArraysExt = "StaticArrays"
+    AccessorsStructArraysExt = "StructArrays"
+    AccessorsTestExt = "Test"
+    AccessorsUnitfulExt = "Unitful"
+
+    [deps.Accessors.weakdeps]
+    AxisKeys = "94b1ba4f-4ee9-5380-92f1-94cde586c3c5"
+    Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
+    IntervalSets = "8197267c-284f-5f27-9208-e0e47529a953"
+    Requires = "ae029012-a4dd-5104-9daa-d747884805df"
+    StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
+    StructArrays = "09ab397b-f2b6-538f-b94a-2f83cf4a842a"
+    Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+    Unitful = "1986cc42-f94f-5a68-af5c-568840ba703d"
 
 [[deps.Adapt]]
 deps = ["LinearAlgebra", "Requires"]
-git-tree-sha1 = "76289dc51920fdc6e0013c872ba9551d54961c24"
+git-tree-sha1 = "6a55b747d1812e699320963ffde36f1ebdda4099"
 uuid = "79e6a3ab-5dfb-504d-930d-738a2a938a0e"
-version = "3.6.2"
+version = "4.0.4"
 weakdeps = ["StaticArrays"]
 
     [deps.Adapt.extensions]
     AdaptStaticArraysExt = "StaticArrays"
+
+[[deps.AliasTables]]
+deps = ["PtrArrays", "Random"]
+git-tree-sha1 = "9876e1e164b144ca45e9e3198d0b689cadfed9ff"
+uuid = "66dad0bd-aa9a-41b7-9441-69ab47430ed8"
+version = "1.1.3"
 
 [[deps.ArgTools]]
 uuid = "0dad84c5-d112-42e6-8d28-ef12dabb789f"
@@ -812,16 +2127,20 @@ uuid = "68821587-b530-5797-8361-c406ea357684"
 version = "3.5.1+1"
 
 [[deps.ArrayInterface]]
-deps = ["Adapt", "LinearAlgebra", "Requires", "SparseArrays", "SuiteSparse"]
-git-tree-sha1 = "f83ec24f76d4c8f525099b2ac475fc098138ec31"
+deps = ["Adapt", "LinearAlgebra"]
+git-tree-sha1 = "3640d077b6dafd64ceb8fd5c1ec76f7ca53bcf76"
 uuid = "4fba245c-0d91-5ea0-9b3e-6abc04ee57a9"
-version = "7.4.11"
+version = "7.16.0"
 
     [deps.ArrayInterface.extensions]
     ArrayInterfaceBandedMatricesExt = "BandedMatrices"
     ArrayInterfaceBlockBandedMatricesExt = "BlockBandedMatrices"
     ArrayInterfaceCUDAExt = "CUDA"
+    ArrayInterfaceCUDSSExt = "CUDSS"
+    ArrayInterfaceChainRulesExt = "ChainRules"
     ArrayInterfaceGPUArraysCoreExt = "GPUArraysCore"
+    ArrayInterfaceReverseDiffExt = "ReverseDiff"
+    ArrayInterfaceSparseArraysExt = "SparseArrays"
     ArrayInterfaceStaticArraysCoreExt = "StaticArraysCore"
     ArrayInterfaceTrackerExt = "Tracker"
 
@@ -829,7 +2148,11 @@ version = "7.4.11"
     BandedMatrices = "aae01518-5342-5314-be14-df237901396f"
     BlockBandedMatrices = "ffab5731-97b5-5995-9138-79e8c1846df0"
     CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
+    CUDSS = "45b445bb-4962-46a0-9369-b4df9d0f772e"
+    ChainRules = "082447d4-558c-5d27-93f4-14fc19e9eca2"
     GPUArraysCore = "46192b85-c4d5-4398-a991-12ede77f4527"
+    ReverseDiff = "37e2e3b7-166d-5795-8a7a-e32c996b4267"
+    SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
     StaticArraysCore = "1e83bf80-4336-4d27-bf5d-d5a4f845583c"
     Tracker = "9f7883ad-71c0-57eb-9f7f-b5c9e6d3789c"
 
@@ -838,71 +2161,69 @@ uuid = "56f22d72-fd6d-98f1-02f0-08ddc0907c33"
 
 [[deps.AxisAlgorithms]]
 deps = ["LinearAlgebra", "Random", "SparseArrays", "WoodburyMatrices"]
-git-tree-sha1 = "66771c8d21c8ff5e3a93379480a2307ac36863f7"
+git-tree-sha1 = "01b8ccb13d68535d73d2b0c23e39bd23155fb712"
 uuid = "13072b0f-2c55-5437-9ae7-d433b7a33950"
-version = "1.0.1"
+version = "1.1.0"
 
 [[deps.Base64]]
 uuid = "2a0f44e3-6c83-55bd-87e4-b1978d98bd5f"
 
 [[deps.BitFlags]]
-git-tree-sha1 = "43b1a4a8f797c1cddadf60499a8a077d4af2cd2d"
+git-tree-sha1 = "0691e34b3bb8be9307330f88d1a3c3f25466c24d"
 uuid = "d1d4a3ce-64b1-5f1a-9ba4-7e7e69966f35"
-version = "0.1.7"
+version = "0.1.9"
 
 [[deps.Bzip2_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
-git-tree-sha1 = "19a35467a82e236ff51bc17a3a44b69ef35185a2"
+git-tree-sha1 = "9e2a6b69137e6969bab0152632dcb3bc108c8bdd"
 uuid = "6e34b625-4abd-537c-b88f-471c36dfa7a0"
-version = "1.0.8+0"
+version = "1.0.8+1"
 
 [[deps.CSV]]
 deps = ["CodecZlib", "Dates", "FilePathsBase", "InlineStrings", "Mmap", "Parsers", "PooledArrays", "PrecompileTools", "SentinelArrays", "Tables", "Unicode", "WeakRefStrings", "WorkerUtilities"]
-git-tree-sha1 = "44dbf560808d49041989b8a96cae4cffbeb7966a"
+git-tree-sha1 = "deddd8725e5e1cc49ee205a1964256043720a6c3"
 uuid = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
-version = "0.10.11"
+version = "0.10.15"
 
 [[deps.Cairo_jll]]
-deps = ["Artifacts", "Bzip2_jll", "CompilerSupportLibraries_jll", "Fontconfig_jll", "FreeType2_jll", "Glib_jll", "JLLWrappers", "LZO_jll", "Libdl", "Pixman_jll", "Pkg", "Xorg_libXext_jll", "Xorg_libXrender_jll", "Zlib_jll", "libpng_jll"]
-git-tree-sha1 = "4b859a208b2397a7a623a03449e4636bdb17bcf2"
+deps = ["Artifacts", "Bzip2_jll", "CompilerSupportLibraries_jll", "Fontconfig_jll", "FreeType2_jll", "Glib_jll", "JLLWrappers", "LZO_jll", "Libdl", "Pixman_jll", "Xorg_libXext_jll", "Xorg_libXrender_jll", "Zlib_jll", "libpng_jll"]
+git-tree-sha1 = "009060c9a6168704143100f36ab08f06c2af4642"
 uuid = "83423d85-b0ee-5818-9007-b63ccbeb887a"
-version = "1.16.1+1"
-
-[[deps.Calculus]]
-deps = ["LinearAlgebra"]
-git-tree-sha1 = "f641eb0a4f00c343bbc32346e1217b86f3ce9dad"
-uuid = "49dc2e85-a5d0-5ad3-a950-438e2897f1b9"
-version = "0.5.1"
+version = "1.18.2+1"
 
 [[deps.ChainRulesCore]]
-deps = ["Compat", "LinearAlgebra", "SparseArrays"]
-git-tree-sha1 = "e30f2f4e20f7f186dc36529910beaedc60cfa644"
+deps = ["Compat", "LinearAlgebra"]
+git-tree-sha1 = "3e4b134270b372f2ed4d4d0e936aabaefc1802bc"
 uuid = "d360d2e6-b24c-11e9-a2a3-2a2ae2dbcce4"
-version = "1.16.0"
+version = "1.25.0"
+weakdeps = ["SparseArrays"]
+
+    [deps.ChainRulesCore.extensions]
+    ChainRulesCoreSparseArraysExt = "SparseArrays"
 
 [[deps.Clustering]]
 deps = ["Distances", "LinearAlgebra", "NearestNeighbors", "Printf", "Random", "SparseArrays", "Statistics", "StatsBase"]
-git-tree-sha1 = "b86ac2c5543660d238957dbde5ac04520ae977a7"
+git-tree-sha1 = "9ebb045901e9bbf58767a9f34ff89831ed711aae"
 uuid = "aaaa29a8-35af-508c-8bc3-b662a17a0fe5"
-version = "0.15.4"
+version = "0.15.7"
 
 [[deps.CodecZlib]]
 deps = ["TranscodingStreams", "Zlib_jll"]
-git-tree-sha1 = "02aa26a4cf76381be7f66e020a3eddeb27b0a092"
+git-tree-sha1 = "bce6804e5e6044c6daab27bb533d1295e4a2e759"
 uuid = "944b1d66-785c-5afd-91f1-9de20f533193"
-version = "0.7.2"
+version = "0.7.6"
 
 [[deps.ColorSchemes]]
 deps = ["ColorTypes", "ColorVectorSpace", "Colors", "FixedPointNumbers", "PrecompileTools", "Random"]
-git-tree-sha1 = "d9a8f86737b665e15a9641ecbac64deef9ce6724"
+git-tree-sha1 = "b5278586822443594ff615963b0c09755771b3e0"
 uuid = "35d6a980-a343-548e-a6ea-1d62b119f2f4"
-version = "3.23.0"
+version = "3.26.0"
 
 [[deps.ColorTypes]]
 deps = ["FixedPointNumbers", "Random"]
-git-tree-sha1 = "eb7f0f8307f71fac7c606984ea5fb2817275d6e4"
+git-tree-sha1 = "b10d0b65641d57b8b4d5e234446582de5047050d"
 uuid = "3da002f7-5984-5a60-b8a6-cbb66c0b333f"
-version = "0.11.4"
+version = "0.11.5"
 
 [[deps.ColorVectorSpace]]
 deps = ["ColorTypes", "FixedPointNumbers", "LinearAlgebra", "Requires", "Statistics", "TensorCore"]
@@ -916,21 +2237,31 @@ weakdeps = ["SpecialFunctions"]
 
 [[deps.Colors]]
 deps = ["ColorTypes", "FixedPointNumbers", "Reexport"]
-git-tree-sha1 = "fc08e5930ee9a4e03f84bfb5211cb54e7769758a"
+git-tree-sha1 = "362a287c3aa50601b0bc359053d5c2468f0e7ce0"
 uuid = "5ae59095-9a9b-59fe-a467-6f913c188581"
-version = "0.12.10"
+version = "0.12.11"
+
+[[deps.Combinatorics]]
+git-tree-sha1 = "08c8b6831dc00bfea825826be0bc8336fc369860"
+uuid = "861a8166-3701-5b0c-9a16-15d98fcdc6aa"
+version = "1.0.2"
+
+[[deps.CommonSolve]]
+git-tree-sha1 = "0eee5eb66b1cf62cd6ad1b460238e60e4b09400c"
+uuid = "38540f10-b2f7-11e9-35d8-d573e4eb0ff2"
+version = "0.2.4"
 
 [[deps.CommonSubexpressions]]
-deps = ["MacroTools", "Test"]
-git-tree-sha1 = "7b8a93dba8af7e3b42fecabf646260105ac373f7"
+deps = ["MacroTools"]
+git-tree-sha1 = "cda2cfaebb4be89c9084adaca7dd7333369715c5"
 uuid = "bbf7d656-a473-5ed7-a52c-81e309532950"
-version = "0.3.0"
+version = "0.3.1"
 
 [[deps.Compat]]
-deps = ["UUIDs"]
-git-tree-sha1 = "e460f044ca8b99be31d35fe54fc33a5c33dd8ed7"
+deps = ["TOML", "UUIDs"]
+git-tree-sha1 = "8ae8d32e09f0dcf42a36b90d4e17f5dd2e4c4215"
 uuid = "34da2185-b29b-5c13-b0c7-acf172513d20"
-version = "4.9.0"
+version = "4.16.0"
 weakdeps = ["Dates", "LinearAlgebra"]
 
     [deps.Compat.extensions]
@@ -939,32 +2270,42 @@ weakdeps = ["Dates", "LinearAlgebra"]
 [[deps.CompilerSupportLibraries_jll]]
 deps = ["Artifacts", "Libdl"]
 uuid = "e66e0078-7015-5450-92f7-15fbd957f2ae"
-version = "1.0.2+0"
+version = "1.0.5+1"
+
+[[deps.CompositionsBase]]
+git-tree-sha1 = "802bb88cd69dfd1509f6670416bd4434015693ad"
+uuid = "a33af91c-f02d-484b-be07-31d278c5ca2b"
+version = "0.1.2"
+weakdeps = ["InverseFunctions"]
+
+    [deps.CompositionsBase.extensions]
+    CompositionsBaseInverseFunctionsExt = "InverseFunctions"
 
 [[deps.ConcurrentUtilities]]
 deps = ["Serialization", "Sockets"]
-git-tree-sha1 = "5372dbbf8f0bdb8c700db5367132925c0771ef7e"
+git-tree-sha1 = "ea32b83ca4fefa1768dc84e504cc0a94fb1ab8d1"
 uuid = "f0e56b4a-5159-44fe-b623-3e5288b988bb"
-version = "2.2.1"
+version = "2.4.2"
 
 [[deps.ConstructionBase]]
-deps = ["LinearAlgebra"]
-git-tree-sha1 = "fe2838a593b5f776e1597e086dcd47560d94e816"
+git-tree-sha1 = "76219f1ed5771adbb096743bff43fb5fdd4c1157"
 uuid = "187b0558-2788-49d3-abe0-74a17ed4e7c9"
-version = "1.5.3"
+version = "1.5.8"
 
     [deps.ConstructionBase.extensions]
     ConstructionBaseIntervalSetsExt = "IntervalSets"
+    ConstructionBaseLinearAlgebraExt = "LinearAlgebra"
     ConstructionBaseStaticArraysExt = "StaticArrays"
 
     [deps.ConstructionBase.weakdeps]
     IntervalSets = "8197267c-284f-5f27-9208-e0e47529a953"
+    LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
     StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 
 [[deps.Contour]]
-git-tree-sha1 = "d05d9e7b7aedff4e5b51a029dced05cfb6125781"
+git-tree-sha1 = "439e35b0b36e2e5881738abc8857bd92ad6ff9a8"
 uuid = "d38c429a-6771-53c6-b99e-75d170b6e991"
-version = "0.6.2"
+version = "0.6.3"
 
 [[deps.Crayons]]
 git-tree-sha1 = "249fe38abf76d48563e2f4556bebd215aa317e15"
@@ -972,21 +2313,21 @@ uuid = "a8cc5b0e-0ffa-5ad4-8c14-923d3ee1735f"
 version = "4.1.1"
 
 [[deps.DataAPI]]
-git-tree-sha1 = "8da84edb865b0b5b0100c0666a9bc9a0b71c553c"
+git-tree-sha1 = "abe83f3a2f1b857aac70ef8b269080af17764bbe"
 uuid = "9a962f9c-6df0-11e9-0e5d-c546b8b5ee8a"
-version = "1.15.0"
+version = "1.16.0"
 
 [[deps.DataFrames]]
-deps = ["Compat", "DataAPI", "DataStructures", "Future", "InlineStrings", "InvertedIndices", "IteratorInterfaceExtensions", "LinearAlgebra", "Markdown", "Missings", "PooledArrays", "PrecompileTools", "PrettyTables", "Printf", "REPL", "Random", "Reexport", "SentinelArrays", "SortingAlgorithms", "Statistics", "TableTraits", "Tables", "Unicode"]
-git-tree-sha1 = "04c738083f29f86e62c8afc341f0967d8717bdb8"
+deps = ["Compat", "DataAPI", "DataStructures", "Future", "InlineStrings", "InvertedIndices", "IteratorInterfaceExtensions", "LinearAlgebra", "Markdown", "Missings", "PooledArrays", "PrecompileTools", "PrettyTables", "Printf", "Random", "Reexport", "SentinelArrays", "SortingAlgorithms", "Statistics", "TableTraits", "Tables", "Unicode"]
+git-tree-sha1 = "fb61b4812c49343d7ef0b533ba982c46021938a6"
 uuid = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
-version = "1.6.1"
+version = "1.7.0"
 
 [[deps.DataStructures]]
 deps = ["Compat", "InteractiveUtils", "OrderedCollections"]
-git-tree-sha1 = "3dbd312d370723b6bb43ba9d02fc36abade4518d"
+git-tree-sha1 = "1d0a14036acb104d9e89698bd408f63ab58cdc82"
 uuid = "864edb3b-99cc-5e75-8d2d-829cb0a9cfe8"
-version = "0.18.15"
+version = "0.18.20"
 
 [[deps.DataValueInterfaces]]
 git-tree-sha1 = "bfc1187b79289637fa0ef6d4436ebdfe6905cbd6"
@@ -996,6 +2337,12 @@ version = "1.0.0"
 [[deps.Dates]]
 deps = ["Printf"]
 uuid = "ade2ca70-3891-5945-98fb-dc099432e06a"
+
+[[deps.Dbus_jll]]
+deps = ["Artifacts", "Expat_jll", "JLLWrappers", "Libdl"]
+git-tree-sha1 = "fc173b380865f70627d7dd1190dc2fce6cc105af"
+uuid = "ee1fde0b-3d02-5ea6-8484-8dfef6360eab"
+version = "1.14.10+0"
 
 [[deps.DelimitedFiles]]
 deps = ["Mmap"]
@@ -1017,12 +2364,13 @@ version = "1.15.1"
 
 [[deps.Distances]]
 deps = ["LinearAlgebra", "Statistics", "StatsAPI"]
-git-tree-sha1 = "b6def76ffad15143924a2199f72a5cd883a2e8a9"
+git-tree-sha1 = "66c4c81f259586e8f002eacebc177e1fb06363b0"
 uuid = "b4f34e82-e78d-54a5-968a-f98e89d6e8f7"
-version = "0.10.9"
-weakdeps = ["SparseArrays"]
+version = "0.10.11"
+weakdeps = ["ChainRulesCore", "SparseArrays"]
 
     [deps.Distances.extensions]
+    DistancesChainRulesCoreExt = "ChainRulesCore"
     DistancesSparseArraysExt = "SparseArrays"
 
 [[deps.Distributed]]
@@ -1030,10 +2378,10 @@ deps = ["Random", "Serialization", "Sockets"]
 uuid = "8ba89e20-285c-5b6f-9357-94700520ee1b"
 
 [[deps.Distributions]]
-deps = ["FillArrays", "LinearAlgebra", "PDMats", "Printf", "QuadGK", "Random", "SpecialFunctions", "Statistics", "StatsAPI", "StatsBase", "StatsFuns"]
-git-tree-sha1 = "9242eec9b7e2e14f9952e8ea1c7e31a50501d587"
+deps = ["AliasTables", "FillArrays", "LinearAlgebra", "PDMats", "Printf", "QuadGK", "Random", "SpecialFunctions", "Statistics", "StatsAPI", "StatsBase", "StatsFuns"]
+git-tree-sha1 = "03aa5d44647eaec98e1920635cdfed5d5560a8b9"
 uuid = "31c24e10-a181-5473-b8eb-7969acd0382f"
-version = "0.25.104"
+version = "0.25.117"
 
     [deps.Distributions.extensions]
     DistributionsChainRulesCoreExt = "ChainRulesCore"
@@ -1056,12 +2404,6 @@ deps = ["ArgTools", "FileWatching", "LibCURL", "NetworkOptions"]
 uuid = "f43a241f-c20a-4ad4-852c-f6b1247861c6"
 version = "1.6.0"
 
-[[deps.DualNumbers]]
-deps = ["Calculus", "NaNMath", "SpecialFunctions"]
-git-tree-sha1 = "5837a837389fccf076445fce071c8ddaea35a566"
-uuid = "fa6b7ba4-c1ee-5f82-b5fc-ecf0adba8f74"
-version = "0.6.8"
-
 [[deps.EpollShim_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl"]
 git-tree-sha1 = "8e9441ee83492030ace98f9789a654a6d0b1f643"
@@ -1070,94 +2412,100 @@ version = "0.0.20230411+0"
 
 [[deps.ExceptionUnwrapping]]
 deps = ["Test"]
-git-tree-sha1 = "e90caa41f5a86296e014e148ee061bd6c3edec96"
+git-tree-sha1 = "dcb08a0d93ec0b1cdc4af184b26b591e9695423a"
 uuid = "460bff9d-24e4-43bc-9d9f-a8973cb893f4"
-version = "0.1.9"
+version = "0.1.10"
 
 [[deps.Expat_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl"]
-git-tree-sha1 = "4558ab818dcceaab612d1bb8c19cee87eda2b83c"
+git-tree-sha1 = "1c6317308b9dc757616f0b5cb379db10494443a7"
 uuid = "2e619515-83b5-522b-bb60-26c02a35a201"
-version = "2.5.0+0"
+version = "2.6.2+0"
 
 [[deps.FFMPEG]]
 deps = ["FFMPEG_jll"]
-git-tree-sha1 = "b57e3acbe22f8484b4b5ff66a7499717fe1a9cc8"
+git-tree-sha1 = "53ebe7511fa11d33bec688a9178fac4e49eeee00"
 uuid = "c87230d0-a227-11e9-1b43-d7ebe4e7570a"
-version = "0.4.1"
+version = "0.4.2"
 
 [[deps.FFMPEG_jll]]
-deps = ["Artifacts", "Bzip2_jll", "FreeType2_jll", "FriBidi_jll", "JLLWrappers", "LAME_jll", "Libdl", "Ogg_jll", "OpenSSL_jll", "Opus_jll", "PCRE2_jll", "Pkg", "Zlib_jll", "libaom_jll", "libass_jll", "libfdk_aac_jll", "libvorbis_jll", "x264_jll", "x265_jll"]
-git-tree-sha1 = "74faea50c1d007c85837327f6775bea60b5492dd"
+deps = ["Artifacts", "Bzip2_jll", "FreeType2_jll", "FriBidi_jll", "JLLWrappers", "LAME_jll", "Libdl", "Ogg_jll", "OpenSSL_jll", "Opus_jll", "PCRE2_jll", "Zlib_jll", "libaom_jll", "libass_jll", "libfdk_aac_jll", "libvorbis_jll", "x264_jll", "x265_jll"]
+git-tree-sha1 = "466d45dc38e15794ec7d5d63ec03d776a9aff36e"
 uuid = "b22a6f82-2f65-5046-a5b2-351ab43fb4e5"
-version = "4.4.2+2"
+version = "4.4.4+1"
 
 [[deps.FFTW]]
 deps = ["AbstractFFTs", "FFTW_jll", "LinearAlgebra", "MKL_jll", "Preferences", "Reexport"]
-git-tree-sha1 = "b4fbdd20c889804969571cc589900803edda16b7"
+git-tree-sha1 = "4820348781ae578893311153d69049a93d05f39d"
 uuid = "7a1cc6ca-52ef-59f5-83cd-3a7055c09341"
-version = "1.7.1"
+version = "1.8.0"
 
 [[deps.FFTW_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
-git-tree-sha1 = "c6033cc3892d0ef5bb9cd29b7f2f0331ea5184ea"
+git-tree-sha1 = "4d81ed14783ec49ce9f2e168208a12ce1815aa25"
 uuid = "f5851436-0d7a-5f13-b9de-f02708fd171a"
-version = "3.3.10+0"
-
-[[deps.FileIO]]
-deps = ["Pkg", "Requires", "UUIDs"]
-git-tree-sha1 = "299dc33549f68299137e51e6d49a13b5b1da9673"
-uuid = "5789e2e9-d7fb-5bc7-8068-2c6fae9b9549"
-version = "1.16.1"
+version = "3.3.10+1"
 
 [[deps.FilePathsBase]]
-deps = ["Compat", "Dates", "Mmap", "Printf", "Test", "UUIDs"]
-git-tree-sha1 = "e27c4ebe80e8699540f2d6c805cc12203b614f12"
+deps = ["Compat", "Dates"]
+git-tree-sha1 = "7878ff7172a8e6beedd1dea14bd27c3c6340d361"
 uuid = "48062228-2e41-5def-b9a4-89aafe57970f"
-version = "0.9.20"
+version = "0.9.22"
+weakdeps = ["Mmap", "Test"]
+
+    [deps.FilePathsBase.extensions]
+    FilePathsBaseMmapExt = "Mmap"
+    FilePathsBaseTestExt = "Test"
 
 [[deps.FileWatching]]
 uuid = "7b1f6079-737a-58dc-b8bc-7a2ca5c1b5ee"
 
 [[deps.FillArrays]]
-deps = ["LinearAlgebra", "Random", "SparseArrays", "Statistics"]
-git-tree-sha1 = "f372472e8672b1d993e93dada09e23139b509f9e"
+deps = ["LinearAlgebra"]
+git-tree-sha1 = "6a70198746448456524cb442b8af316927ff3e1a"
 uuid = "1a297f60-69ca-5386-bcde-b61e274b549b"
-version = "1.5.0"
+version = "1.13.0"
+weakdeps = ["PDMats", "SparseArrays", "Statistics"]
+
+    [deps.FillArrays.extensions]
+    FillArraysPDMatsExt = "PDMats"
+    FillArraysSparseArraysExt = "SparseArrays"
+    FillArraysStatisticsExt = "Statistics"
 
 [[deps.FiniteDiff]]
-deps = ["ArrayInterface", "LinearAlgebra", "Requires", "Setfield", "SparseArrays"]
-git-tree-sha1 = "c6e4a1fbe73b31a3dea94b1da449503b8830c306"
+deps = ["ArrayInterface", "LinearAlgebra", "Setfield"]
+git-tree-sha1 = "b10bdafd1647f57ace3885143936749d61638c3b"
 uuid = "6a86dc24-6348-571c-b903-95158fe2bd41"
-version = "2.21.1"
+version = "2.26.0"
 
     [deps.FiniteDiff.extensions]
     FiniteDiffBandedMatricesExt = "BandedMatrices"
     FiniteDiffBlockBandedMatricesExt = "BlockBandedMatrices"
+    FiniteDiffSparseArraysExt = "SparseArrays"
     FiniteDiffStaticArraysExt = "StaticArrays"
 
     [deps.FiniteDiff.weakdeps]
     BandedMatrices = "aae01518-5342-5314-be14-df237901396f"
     BlockBandedMatrices = "ffab5731-97b5-5995-9138-79e8c1846df0"
+    SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
     StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 
 [[deps.FixedPointNumbers]]
 deps = ["Statistics"]
-git-tree-sha1 = "335bfdceacc84c5cdf16aadc768aa5ddfc5383cc"
+git-tree-sha1 = "05882d6995ae5c12bb5f36dd2ed3f61c98cbb172"
 uuid = "53c48c17-4a7d-5ca2-90c5-79b7896eea93"
-version = "0.8.4"
+version = "0.8.5"
 
 [[deps.Fontconfig_jll]]
-deps = ["Artifacts", "Bzip2_jll", "Expat_jll", "FreeType2_jll", "JLLWrappers", "Libdl", "Libuuid_jll", "Pkg", "Zlib_jll"]
-git-tree-sha1 = "21efd19106a55620a188615da6d3d06cd7f6ee03"
+deps = ["Artifacts", "Bzip2_jll", "Expat_jll", "FreeType2_jll", "JLLWrappers", "Libdl", "Libuuid_jll", "Zlib_jll"]
+git-tree-sha1 = "db16beca600632c95fc8aca29890d83788dd8b23"
 uuid = "a3f928ae-7b40-5064-980b-68af3947d34b"
-version = "2.13.93+0"
+version = "2.13.96+0"
 
-[[deps.Formatting]]
-deps = ["Printf"]
-git-tree-sha1 = "8339d61043228fdd3eb658d86c926cb282ae72a8"
-uuid = "59287772-0a20-5a39-b81b-1366585eb4c0"
-version = "0.4.2"
+[[deps.Format]]
+git-tree-sha1 = "9c68794ef81b08086aeb32eeaf33531668d5f5fc"
+uuid = "1fa38f19-a742-5d3f-a2b9-30dd87b9d5f8"
+version = "1.3.7"
 
 [[deps.ForwardDiff]]
 deps = ["CommonSubexpressions", "DiffResults", "DiffRules", "LinearAlgebra", "LogExpFunctions", "NaNMath", "Preferences", "Printf", "Random", "SpecialFunctions"]
@@ -1171,43 +2519,43 @@ weakdeps = ["StaticArrays"]
 
 [[deps.FreeType2_jll]]
 deps = ["Artifacts", "Bzip2_jll", "JLLWrappers", "Libdl", "Zlib_jll"]
-git-tree-sha1 = "d8db6a5a2fe1381c1ea4ef2cab7c69c2de7f9ea0"
+git-tree-sha1 = "5c1d8ae0efc6c2e7b1fc502cbe25def8f661b7bc"
 uuid = "d7e528f0-a631-5988-bf34-fe36492bcfd7"
-version = "2.13.1+0"
+version = "2.13.2+0"
 
 [[deps.FriBidi_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
-git-tree-sha1 = "aa31987c2ba8704e23c6c8ba8a4f769d5d7e4f91"
+deps = ["Artifacts", "JLLWrappers", "Libdl"]
+git-tree-sha1 = "1ed150b39aebcc805c26b93a8d0122c940f64ce2"
 uuid = "559328eb-81f9-559d-9380-de523a88c83c"
-version = "1.0.10+0"
+version = "1.0.14+0"
 
 [[deps.Future]]
 deps = ["Random"]
 uuid = "9fa8497b-333b-5362-9e8d-4d0656e87820"
 
 [[deps.GLFW_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Libglvnd_jll", "Pkg", "Xorg_libXcursor_jll", "Xorg_libXi_jll", "Xorg_libXinerama_jll", "Xorg_libXrandr_jll"]
-git-tree-sha1 = "d972031d28c8c8d9d7b41a536ad7bb0c2579caca"
+deps = ["Artifacts", "JLLWrappers", "Libdl", "Libglvnd_jll", "Xorg_libXcursor_jll", "Xorg_libXi_jll", "Xorg_libXinerama_jll", "Xorg_libXrandr_jll", "libdecor_jll", "xkbcommon_jll"]
+git-tree-sha1 = "532f9126ad901533af1d4f5c198867227a7bb077"
 uuid = "0656b61e-2033-5cc2-a64a-77c0f6c09b89"
-version = "3.3.8+0"
+version = "3.4.0+1"
 
 [[deps.GLM]]
 deps = ["Distributions", "LinearAlgebra", "Printf", "Reexport", "SparseArrays", "SpecialFunctions", "Statistics", "StatsAPI", "StatsBase", "StatsFuns", "StatsModels"]
-git-tree-sha1 = "97829cfda0df99ddaeaafb5b370d6cab87b7013e"
+git-tree-sha1 = "273bd1cd30768a2fddfa3fd63bbc746ed7249e5f"
 uuid = "38e38edf-8417-5370-95a0-9cbb8c7f171a"
-version = "1.8.3"
+version = "1.9.0"
 
 [[deps.GR]]
-deps = ["Artifacts", "Base64", "DelimitedFiles", "Downloads", "GR_jll", "HTTP", "JSON", "Libdl", "LinearAlgebra", "Pkg", "Preferences", "Printf", "Random", "Serialization", "Sockets", "TOML", "Tar", "Test", "UUIDs", "p7zip_jll"]
-git-tree-sha1 = "d73afa4a2bb9de56077242d98cf763074ab9a970"
+deps = ["Artifacts", "Base64", "DelimitedFiles", "Downloads", "GR_jll", "HTTP", "JSON", "Libdl", "LinearAlgebra", "Preferences", "Printf", "Qt6Wayland_jll", "Random", "Serialization", "Sockets", "TOML", "Tar", "Test", "p7zip_jll"]
+git-tree-sha1 = "ee28ddcd5517d54e417182fec3886e7412d3926f"
 uuid = "28b8d3ca-fb5f-59d9-8090-bfdbd6d07a71"
-version = "0.72.9"
+version = "0.73.8"
 
 [[deps.GR_jll]]
 deps = ["Artifacts", "Bzip2_jll", "Cairo_jll", "FFMPEG_jll", "Fontconfig_jll", "FreeType2_jll", "GLFW_jll", "JLLWrappers", "JpegTurbo_jll", "Libdl", "Libtiff_jll", "Pixman_jll", "Qt6Base_jll", "Zlib_jll", "libpng_jll"]
-git-tree-sha1 = "1596bab77f4f073a14c62424283e7ebff3072eca"
+git-tree-sha1 = "f31929b9e67066bee48eec8b03c0df47d31a74b3"
 uuid = "d2c73de3-f751-5644-a686-071e5b155ba9"
-version = "0.72.9+1"
+version = "0.73.8+0"
 
 [[deps.Gettext_jll]]
 deps = ["Artifacts", "CompilerSupportLibraries_jll", "JLLWrappers", "Libdl", "Libiconv_jll", "Pkg", "XML2_jll"]
@@ -1216,10 +2564,10 @@ uuid = "78b55507-aeef-58d4-861c-77aaff3498b1"
 version = "0.21.0+0"
 
 [[deps.Glib_jll]]
-deps = ["Artifacts", "Gettext_jll", "JLLWrappers", "Libdl", "Libffi_jll", "Libiconv_jll", "Libmount_jll", "PCRE2_jll", "Pkg", "Zlib_jll"]
-git-tree-sha1 = "d3b3624125c1474292d0d8ed0f65554ac37ddb23"
+deps = ["Artifacts", "Gettext_jll", "JLLWrappers", "Libdl", "Libffi_jll", "Libiconv_jll", "Libmount_jll", "PCRE2_jll", "Zlib_jll"]
+git-tree-sha1 = "674ff0db93fffcd11a3573986e550d66cd4fd71f"
 uuid = "7746bdde-850d-59dc-9ae8-88ece973131d"
-version = "2.74.0+2"
+version = "2.80.5+0"
 
 [[deps.Graphite2_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
@@ -1234,51 +2582,64 @@ version = "1.0.2"
 
 [[deps.HTTP]]
 deps = ["Base64", "CodecZlib", "ConcurrentUtilities", "Dates", "ExceptionUnwrapping", "Logging", "LoggingExtras", "MbedTLS", "NetworkOptions", "OpenSSL", "Random", "SimpleBufferStream", "Sockets", "URIs", "UUIDs"]
-git-tree-sha1 = "cb56ccdd481c0dd7f975ad2b3b62d9eda088f7e2"
+git-tree-sha1 = "d1d712be3164d61d1fb98e7ce9bcbc6cc06b45ed"
 uuid = "cd3eb016-35fb-5094-929b-558a96fad6f3"
-version = "1.9.14"
+version = "1.10.8"
 
 [[deps.HarfBuzz_jll]]
-deps = ["Artifacts", "Cairo_jll", "Fontconfig_jll", "FreeType2_jll", "Glib_jll", "Graphite2_jll", "JLLWrappers", "Libdl", "Libffi_jll", "Pkg"]
-git-tree-sha1 = "129acf094d168394e80ee1dc4bc06ec835e510a3"
+deps = ["Artifacts", "Cairo_jll", "Fontconfig_jll", "FreeType2_jll", "Glib_jll", "Graphite2_jll", "JLLWrappers", "Libdl", "Libffi_jll"]
+git-tree-sha1 = "401e4f3f30f43af2c8478fc008da50096ea5240f"
 uuid = "2e76f6c2-a576-52d4-95c1-20adfe4de566"
-version = "2.8.1+1"
+version = "8.3.1+0"
 
 [[deps.HypergeometricFunctions]]
-deps = ["DualNumbers", "LinearAlgebra", "OpenLibm_jll", "SpecialFunctions"]
-git-tree-sha1 = "f218fe3736ddf977e0e772bc9a586b2383da2685"
+deps = ["LinearAlgebra", "OpenLibm_jll", "SpecialFunctions"]
+git-tree-sha1 = "7c4195be1649ae622304031ed46a2f4df989f1eb"
 uuid = "34004b35-14d8-5ef3-9330-4cdb6864b03a"
-version = "0.3.23"
+version = "0.3.24"
 
 [[deps.Hyperscript]]
 deps = ["Test"]
-git-tree-sha1 = "8d511d5b81240fc8e6802386302675bdf47737b9"
+git-tree-sha1 = "179267cfa5e712760cd43dcae385d7ea90cc25a4"
 uuid = "47d2ed2b-36de-50cf-bf87-49c2cf4b8b91"
-version = "0.0.4"
+version = "0.0.5"
 
 [[deps.HypertextLiteral]]
 deps = ["Tricks"]
-git-tree-sha1 = "c47c5fa4c5308f27ccaac35504858d8914e102f9"
+git-tree-sha1 = "7134810b1afce04bbc1045ca1985fbe81ce17653"
 uuid = "ac1192a8-f4b3-4bfe-ba22-af5b92cd3ab2"
-version = "0.9.4"
+version = "0.9.5"
+
+[[deps.HypothesisTests]]
+deps = ["Combinatorics", "Distributions", "LinearAlgebra", "Printf", "Random", "Rmath", "Roots", "Statistics", "StatsAPI", "StatsBase"]
+git-tree-sha1 = "6c3ce99fdbaf680aa6716f4b919c19e902d67c9c"
+uuid = "09f84164-cd44-5f33-b23f-e6b0d136a0d5"
+version = "0.11.3"
 
 [[deps.IOCapture]]
 deps = ["Logging", "Random"]
-git-tree-sha1 = "d75853a0bdbfb1ac815478bacd89cd27b550ace6"
+git-tree-sha1 = "b6d6bfdd7ce25b0f9b2f6b3dd56b2673a66c8770"
 uuid = "b5f81e59-6552-4d32-b1f0-c071b021bf89"
-version = "0.2.3"
+version = "0.2.5"
 
 [[deps.InlineStrings]]
-deps = ["Parsers"]
-git-tree-sha1 = "9cc2baf75c6d09f9da536ddf58eb2f29dedaf461"
+git-tree-sha1 = "45521d31238e87ee9f9732561bfee12d4eebd52d"
 uuid = "842dd82b-1e85-43dc-bf29-5d0ee9dffc48"
-version = "1.4.0"
+version = "1.4.2"
+
+    [deps.InlineStrings.extensions]
+    ArrowTypesExt = "ArrowTypes"
+    ParsersExt = "Parsers"
+
+    [deps.InlineStrings.weakdeps]
+    ArrowTypes = "31f734f8-188a-4ce0-8406-c8a06bd891cd"
+    Parsers = "69de0a69-1ddd-5017-9359-2bf0b02dc9f0"
 
 [[deps.IntelOpenMP_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
-git-tree-sha1 = "ad37c091f7d7daf900963171600d7c1c5c3ede32"
+deps = ["Artifacts", "JLLWrappers", "LazyArtifacts", "Libdl"]
+git-tree-sha1 = "10bd689145d2c3b2a9844005d01087cc1194e79e"
 uuid = "1d5cc7b8-4909-519e-a0f8-d0f5ad9712d0"
-version = "2023.2.0+0"
+version = "2024.2.1+0"
 
 [[deps.InteractiveUtils]]
 deps = ["Markdown"]
@@ -1286,9 +2647,23 @@ uuid = "b77e0a4c-d291-57a0-90e8-8db25a27a240"
 
 [[deps.Interpolations]]
 deps = ["Adapt", "AxisAlgorithms", "ChainRulesCore", "LinearAlgebra", "OffsetArrays", "Random", "Ratios", "Requires", "SharedArrays", "SparseArrays", "StaticArrays", "WoodburyMatrices"]
-git-tree-sha1 = "721ec2cf720536ad005cb38f50dbba7b02419a15"
+git-tree-sha1 = "88a101217d7cb38a7b481ccd50d21876e1d1b0e0"
 uuid = "a98d9a8b-a2ab-59e6-89dd-64a1c18fca59"
-version = "0.14.7"
+version = "0.15.1"
+weakdeps = ["Unitful"]
+
+    [deps.Interpolations.extensions]
+    InterpolationsUnitfulExt = "Unitful"
+
+[[deps.InverseFunctions]]
+git-tree-sha1 = "a779299d77cd080bf77b97535acecd73e1c5e5cb"
+uuid = "3587e190-3f89-42d0-90ee-14403ec27112"
+version = "0.1.17"
+weakdeps = ["Dates", "Test"]
+
+    [deps.InverseFunctions.extensions]
+    InverseFunctionsDatesExt = "Dates"
+    InverseFunctionsTestExt = "Test"
 
 [[deps.InvertedIndices]]
 git-tree-sha1 = "0dc7b50b8d436461be01300fd8cd45aa0274b038"
@@ -1305,23 +2680,17 @@ git-tree-sha1 = "a3f24677c21f5bbe9d2a714f95dcd58337fb2856"
 uuid = "82899510-4779-5014-852e-03e436cf321d"
 version = "1.0.0"
 
-[[deps.JLD2]]
-deps = ["FileIO", "MacroTools", "Mmap", "OrderedCollections", "Pkg", "PrecompileTools", "Printf", "Reexport", "Requires", "TranscodingStreams", "UUIDs"]
-git-tree-sha1 = "c2d0f45afcb5f6209155670bffd100c3b4937ea3"
-uuid = "033835bb-8acc-5ee8-8aae-3f567f8a3819"
-version = "0.4.40"
-
 [[deps.JLFzf]]
 deps = ["Pipe", "REPL", "Random", "fzf_jll"]
-git-tree-sha1 = "f377670cda23b6b7c1c0b3893e37451c5c1a2185"
+git-tree-sha1 = "39d64b09147620f5ffbf6b2d3255be3c901bec63"
 uuid = "1019f520-868f-41f5-a6de-eb00f4b6a39c"
-version = "0.1.5"
+version = "0.1.8"
 
 [[deps.JLLWrappers]]
 deps = ["Artifacts", "Preferences"]
-git-tree-sha1 = "7e5d6779a1e09a36db2a7b6cff50942a0a7d0fca"
+git-tree-sha1 = "be3dc50a92e5a386872a493a10050136d4703f9b"
 uuid = "692b3bcd-3c85-4b1f-b108-f13ce0eb3210"
-version = "1.5.0"
+version = "1.6.1"
 
 [[deps.JSON]]
 deps = ["Dates", "Mmap", "Parsers", "Unicode"]
@@ -1329,59 +2698,73 @@ git-tree-sha1 = "31e996f0a15c7b280ba9f76636b3ff9e2ae58c9a"
 uuid = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
 version = "0.21.4"
 
+[[deps.JSON3]]
+deps = ["Dates", "Mmap", "Parsers", "PrecompileTools", "StructTypes", "UUIDs"]
+git-tree-sha1 = "1d322381ef7b087548321d3f878cb4c9bd8f8f9b"
+uuid = "0f8b85d8-7281-11e9-16c2-39a750bddbf1"
+version = "1.14.1"
+
+    [deps.JSON3.extensions]
+    JSON3ArrowExt = ["ArrowTypes"]
+
+    [deps.JSON3.weakdeps]
+    ArrowTypes = "31f734f8-188a-4ce0-8406-c8a06bd891cd"
+
 [[deps.JpegTurbo_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl"]
-git-tree-sha1 = "6f2675ef130a300a112286de91973805fcc5ffbc"
+git-tree-sha1 = "25ee0be4d43d0269027024d75a24c24d6c6e590c"
 uuid = "aacddb02-875f-59d6-b918-886e6ef4fbf8"
-version = "2.1.91+0"
+version = "3.0.4+0"
 
 [[deps.KernelDensity]]
 deps = ["Distributions", "DocStringExtensions", "FFTW", "Interpolations", "StatsBase"]
-git-tree-sha1 = "90442c50e202a5cdf21a7899c66b240fdef14035"
+git-tree-sha1 = "7d703202e65efa1369de1279c162b915e245eed1"
 uuid = "5ab0869b-81aa-558d-bb23-cbf5423bbe9b"
-version = "0.6.7"
+version = "0.6.9"
 
 [[deps.LAME_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
-git-tree-sha1 = "f6250b16881adf048549549fba48b1161acdac8c"
+deps = ["Artifacts", "JLLWrappers", "Libdl"]
+git-tree-sha1 = "170b660facf5df5de098d866564877e119141cbd"
 uuid = "c1c5ebd0-6772-5130-a774-d5fcae4a789d"
-version = "3.100.1+0"
+version = "3.100.2+0"
 
 [[deps.LERC_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
-git-tree-sha1 = "bf36f528eec6634efc60d7ec062008f171071434"
+deps = ["Artifacts", "JLLWrappers", "Libdl"]
+git-tree-sha1 = "36bdbc52f13a7d1dcb0f3cd694e01677a515655b"
 uuid = "88015f11-f218-50d7-93a8-a6af411a945d"
-version = "3.0.0+1"
+version = "4.0.0+0"
 
 [[deps.LLVMOpenMP_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
-git-tree-sha1 = "f689897ccbe049adb19a065c495e75f372ecd42b"
+deps = ["Artifacts", "JLLWrappers", "Libdl"]
+git-tree-sha1 = "78211fb6cbc872f77cad3fc0b6cf647d923f4929"
 uuid = "1d63c593-3942-5779-bab2-d838dc0a180e"
-version = "15.0.4+0"
+version = "18.1.7+0"
 
 [[deps.LZO_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
-git-tree-sha1 = "e5b909bcf985c5e2605737d2ce278ed791b89be6"
+deps = ["Artifacts", "JLLWrappers", "Libdl"]
+git-tree-sha1 = "854a9c268c43b77b0a27f22d7fab8d33cdb3a731"
 uuid = "dd4b983a-f0e5-5f8d-a1b7-129d4a5fb1ac"
-version = "2.10.1+0"
+version = "2.10.2+1"
 
 [[deps.LaTeXStrings]]
-git-tree-sha1 = "50901ebc375ed41dbf8058da26f9de442febbbec"
+git-tree-sha1 = "dda21b8cbd6a6c40d9d02a73230f9d70fed6918c"
 uuid = "b964fa9f-0449-5b57-a5c2-d3ea65f4040f"
-version = "1.3.1"
+version = "1.4.0"
 
 [[deps.Latexify]]
-deps = ["Formatting", "InteractiveUtils", "LaTeXStrings", "MacroTools", "Markdown", "OrderedCollections", "Printf", "Requires"]
-git-tree-sha1 = "f428ae552340899a935973270b8d98e5a31c49fe"
+deps = ["Format", "InteractiveUtils", "LaTeXStrings", "MacroTools", "Markdown", "OrderedCollections", "Requires"]
+git-tree-sha1 = "ce5f5621cac23a86011836badfedf664a612cee4"
 uuid = "23fbe1c1-3f47-55db-b15f-69d7ec21a316"
-version = "0.16.1"
+version = "0.16.5"
 
     [deps.Latexify.extensions]
     DataFramesExt = "DataFrames"
+    SparseArraysExt = "SparseArrays"
     SymEngineExt = "SymEngine"
 
     [deps.Latexify.weakdeps]
     DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
+    SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
     SymEngine = "123dc426-2d89-5057-bbad-38513e3affd8"
 
 [[deps.LazyArtifacts]]
@@ -1391,21 +2774,26 @@ uuid = "4af54fe1-eca0-43a8-85a7-787d91b784e3"
 [[deps.LibCURL]]
 deps = ["LibCURL_jll", "MozillaCACerts_jll"]
 uuid = "b27032c2-a3e7-50c8-80cd-2d36dbcbfd21"
-version = "0.6.3"
+version = "0.6.4"
 
 [[deps.LibCURL_jll]]
 deps = ["Artifacts", "LibSSH2_jll", "Libdl", "MbedTLS_jll", "Zlib_jll", "nghttp2_jll"]
 uuid = "deac9b47-8bc7-5906-a0fe-35ac56dc84c0"
-version = "7.84.0+0"
+version = "8.4.0+0"
 
 [[deps.LibGit2]]
-deps = ["Base64", "NetworkOptions", "Printf", "SHA"]
+deps = ["Base64", "LibGit2_jll", "NetworkOptions", "Printf", "SHA"]
 uuid = "76f85450-5226-5b5a-8eaa-529ad045b433"
+
+[[deps.LibGit2_jll]]
+deps = ["Artifacts", "LibSSH2_jll", "Libdl", "MbedTLS_jll"]
+uuid = "e37daf67-58a4-590a-8e99-b0245dd2ffc5"
+version = "1.6.4+0"
 
 [[deps.LibSSH2_jll]]
 deps = ["Artifacts", "Libdl", "MbedTLS_jll"]
 uuid = "29816b5a-b9ab-546f-933c-edad1886dfa8"
-version = "1.10.2+0"
+version = "1.11.0+1"
 
 [[deps.Libdl]]
 uuid = "8f399da3-3557-5675-b5ff-fb832c97cbdb"
@@ -1417,10 +2805,10 @@ uuid = "e9f186c6-92d2-5b65-8a66-fee21dc1b490"
 version = "3.2.2+1"
 
 [[deps.Libgcrypt_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Libgpg_error_jll", "Pkg"]
-git-tree-sha1 = "64613c82a59c120435c067c2b809fc61cf5166ae"
+deps = ["Artifacts", "JLLWrappers", "Libdl", "Libgpg_error_jll"]
+git-tree-sha1 = "9fd170c4bbfd8b935fdc5f8b7aa33532c991a673"
 uuid = "d4300ac3-e22c-5743-9152-c294e39db1e4"
-version = "1.8.7+0"
+version = "1.8.11+0"
 
 [[deps.Libglvnd_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg", "Xorg_libX11_jll", "Xorg_libXext_jll"]
@@ -1429,34 +2817,34 @@ uuid = "7e76a0d4-f3c7-5321-8279-8d96eeed0f29"
 version = "1.6.0+0"
 
 [[deps.Libgpg_error_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
-git-tree-sha1 = "c333716e46366857753e273ce6a69ee0945a6db9"
+deps = ["Artifacts", "JLLWrappers", "Libdl"]
+git-tree-sha1 = "fbb1f2bef882392312feb1ede3615ddc1e9b99ed"
 uuid = "7add5ba3-2f88-524e-9cd5-f83b8a55f7b8"
-version = "1.42.0+0"
+version = "1.49.0+0"
 
 [[deps.Libiconv_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
-git-tree-sha1 = "c7cb1f5d892775ba13767a87c7ada0b980ea0a71"
+deps = ["Artifacts", "JLLWrappers", "Libdl"]
+git-tree-sha1 = "f9557a255370125b405568f9767d6d195822a175"
 uuid = "94ce4f54-9a6c-5748-9c1c-f9c7231a4531"
-version = "1.16.1+2"
+version = "1.17.0+0"
 
 [[deps.Libmount_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
-git-tree-sha1 = "9c30530bf0effd46e15e0fdcf2b8636e78cbbd73"
+deps = ["Artifacts", "JLLWrappers", "Libdl"]
+git-tree-sha1 = "0c4f9c4f1a50d8f35048fa0532dabbadf702f81e"
 uuid = "4b2f31a3-9ecc-558c-b454-b3730dcb73e9"
-version = "2.35.0+0"
+version = "2.40.1+0"
 
 [[deps.Libtiff_jll]]
 deps = ["Artifacts", "JLLWrappers", "JpegTurbo_jll", "LERC_jll", "Libdl", "XZ_jll", "Zlib_jll", "Zstd_jll"]
-git-tree-sha1 = "2da088d113af58221c52828a80378e16be7d037a"
+git-tree-sha1 = "b404131d06f7886402758c9ce2214b636eb4d54a"
 uuid = "89763e89-9b03-5906-acba-b20f662cd828"
-version = "4.5.1+1"
+version = "4.7.0+0"
 
 [[deps.Libuuid_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
-git-tree-sha1 = "7f3efec06033682db852f8b3bc3c1d2b0a0ab066"
+deps = ["Artifacts", "JLLWrappers", "Libdl"]
+git-tree-sha1 = "5ee6203157c120d79034c748a2acba45b82b8807"
 uuid = "38a345b3-de98-5d2b-a5d3-14cd9215e700"
-version = "2.36.0+0"
+version = "2.40.1+0"
 
 [[deps.LinearAlgebra]]
 deps = ["Libdl", "OpenBLAS_jll", "libblastrampoline_jll"]
@@ -1464,9 +2852,9 @@ uuid = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 
 [[deps.LogExpFunctions]]
 deps = ["DocStringExtensions", "IrrationalConstants", "LinearAlgebra"]
-git-tree-sha1 = "5ab83e1679320064c29e8973034357655743d22d"
+git-tree-sha1 = "a2d09619db4e765091ee5c6ffe8872849de0feea"
 uuid = "2ab3a3ac-af41-5b50-aa03-7779005ae688"
-version = "0.3.25"
+version = "0.3.28"
 
     [deps.LogExpFunctions.extensions]
     LogExpFunctionsChainRulesCoreExt = "ChainRulesCore"
@@ -1483,9 +2871,9 @@ uuid = "56ddb016-857b-54e1-b83d-db4d58db5568"
 
 [[deps.LoggingExtras]]
 deps = ["Dates", "Logging"]
-git-tree-sha1 = "cedb76b37bc5a6c702ade66be44f831fa23c681e"
+git-tree-sha1 = "c1dd6d7978c12545b4179fb6153b9250c96b0075"
 uuid = "e6f89c97-d47a-5376-807f-9c37f3926c36"
-version = "1.0.0"
+version = "1.0.3"
 
 [[deps.LsqFit]]
 deps = ["Distributions", "ForwardDiff", "LinearAlgebra", "NLSolversBase", "Printf", "StatsAPI"]
@@ -1499,31 +2887,31 @@ uuid = "6c6e2e6c-3030-632d-7369-2d6c69616d65"
 version = "0.1.4"
 
 [[deps.MKL_jll]]
-deps = ["Artifacts", "IntelOpenMP_jll", "JLLWrappers", "LazyArtifacts", "Libdl", "Pkg"]
-git-tree-sha1 = "eb006abbd7041c28e0d16260e50a24f8f9104913"
+deps = ["Artifacts", "IntelOpenMP_jll", "JLLWrappers", "LazyArtifacts", "Libdl", "oneTBB_jll"]
+git-tree-sha1 = "f046ccd0c6db2832a9f639e2c669c6fe867e5f4f"
 uuid = "856f044c-d86e-5d09-b602-aeab76dc8ba7"
-version = "2023.2.0+0"
+version = "2024.2.0+0"
 
 [[deps.MacroTools]]
 deps = ["Markdown", "Random"]
-git-tree-sha1 = "9ee1618cbf5240e6d4e0371d6f24065083f60c48"
+git-tree-sha1 = "2fa9ee3e63fd3a4f7a9a4f4744a52f4856de82df"
 uuid = "1914dd2f-81c6-5fcd-8719-6d5c9610ff09"
-version = "0.5.11"
+version = "0.5.13"
 
 [[deps.Markdown]]
 deps = ["Base64"]
 uuid = "d6f4376e-aef5-505a-96c1-9c027394607a"
 
 [[deps.MbedTLS]]
-deps = ["Dates", "MbedTLS_jll", "MozillaCACerts_jll", "Random", "Sockets"]
-git-tree-sha1 = "03a9b9718f5682ecb107ac9f7308991db4ce395b"
+deps = ["Dates", "MbedTLS_jll", "MozillaCACerts_jll", "NetworkOptions", "Random", "Sockets"]
+git-tree-sha1 = "c067a280ddc25f196b5e7df3877c6b226d390aaf"
 uuid = "739be429-bea8-5141-9913-cc70e7f3736d"
-version = "1.1.7"
+version = "1.1.9"
 
 [[deps.MbedTLS_jll]]
 deps = ["Artifacts", "Libdl"]
 uuid = "c8ffd9c3-330d-5841-b78e-0817d7145fa1"
-version = "2.28.2+0"
+version = "2.28.2+1"
 
 [[deps.Measures]]
 git-tree-sha1 = "c13304c81eec1ed3af7fc20e75fb6b26092a1102"
@@ -1532,22 +2920,22 @@ version = "0.3.2"
 
 [[deps.Missings]]
 deps = ["DataAPI"]
-git-tree-sha1 = "f66bdc5de519e8f8ae43bdc598782d35a25b1272"
+git-tree-sha1 = "ec4f7fbeab05d7747bdf98eb74d130a2a2ed298d"
 uuid = "e1d29d7a-bbdc-5cf2-9ac0-f12de2c33e28"
-version = "1.1.0"
+version = "1.2.0"
 
 [[deps.Mmap]]
 uuid = "a63ad114-7e13-5084-954f-fe012c677804"
 
 [[deps.MozillaCACerts_jll]]
 uuid = "14a3606d-f60d-562e-9121-12d972cd8159"
-version = "2022.10.11"
+version = "2023.1.10"
 
 [[deps.MultivariateStats]]
-deps = ["Arpack", "LinearAlgebra", "SparseArrays", "Statistics", "StatsAPI", "StatsBase"]
-git-tree-sha1 = "68bf5103e002c44adfd71fea6bd770b3f0586843"
+deps = ["Arpack", "Distributions", "LinearAlgebra", "SparseArrays", "Statistics", "StatsAPI", "StatsBase"]
+git-tree-sha1 = "816620e3aac93e5b5359e4fdaf23ca4525b00ddf"
 uuid = "6f286f6a-111f-5878-ab1e-185364afe411"
-version = "0.10.2"
+version = "0.10.3"
 
 [[deps.NLSolversBase]]
 deps = ["DiffResults", "Distributed", "FiniteDiff", "ForwardDiff"]
@@ -1563,24 +2951,27 @@ version = "1.0.2"
 
 [[deps.NearestNeighbors]]
 deps = ["Distances", "StaticArrays"]
-git-tree-sha1 = "2c3726ceb3388917602169bed973dbc97f1b51a8"
+git-tree-sha1 = "3cebfc94a0754cc329ebc3bab1e6c89621e791ad"
 uuid = "b8a86587-4115-5ab1-83bc-aa920d37bbce"
-version = "0.4.13"
+version = "0.4.20"
 
 [[deps.NetworkOptions]]
 uuid = "ca575930-c2e3-43a9-ace4-1e988b2c1908"
 version = "1.2.0"
 
 [[deps.Observables]]
-git-tree-sha1 = "6862738f9796b3edc1c09d0890afce4eca9e7e93"
+git-tree-sha1 = "7438a59546cf62428fc9d1bc94729146d37a7225"
 uuid = "510215fc-4207-5dde-b226-833fc4488ee2"
-version = "0.5.4"
+version = "0.5.5"
 
 [[deps.OffsetArrays]]
-deps = ["Adapt"]
-git-tree-sha1 = "2ac17d29c523ce1cd38e27785a7d23024853a4bb"
+git-tree-sha1 = "1a27764e945a152f7ca7efa04de513d473e9542e"
 uuid = "6fe1bfb0-de20-5000-8ca7-80f57d26f881"
-version = "1.12.10"
+version = "1.14.1"
+weakdeps = ["Adapt"]
+
+    [deps.OffsetArrays.extensions]
+    OffsetArraysAdaptExt = "Adapt"
 
 [[deps.Ogg_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
@@ -1591,24 +2982,24 @@ version = "1.3.5+1"
 [[deps.OpenBLAS_jll]]
 deps = ["Artifacts", "CompilerSupportLibraries_jll", "Libdl"]
 uuid = "4536629a-c528-5b80-bd46-f80d51c5b363"
-version = "0.3.21+4"
+version = "0.3.23+2"
 
 [[deps.OpenLibm_jll]]
 deps = ["Artifacts", "Libdl"]
 uuid = "05823500-19ac-5b8b-9628-191a04bc5112"
-version = "0.8.1+0"
+version = "0.8.1+2"
 
 [[deps.OpenSSL]]
 deps = ["BitFlags", "Dates", "MozillaCACerts_jll", "OpenSSL_jll", "Sockets"]
-git-tree-sha1 = "51901a49222b09e3743c65b8847687ae5fc78eb2"
+git-tree-sha1 = "38cb508d080d21dc1128f7fb04f20387ed4c0af4"
 uuid = "4d8831e6-92b7-49fb-bdf8-b643e874388c"
-version = "1.4.1"
+version = "1.4.3"
 
 [[deps.OpenSSL_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl"]
-git-tree-sha1 = "bbb5c2115d63c2f1451cb70e5ef75e8fe4707019"
+git-tree-sha1 = "7493f61f55a6cce7325f197443aa80d32554ba10"
 uuid = "458c3c95-2e84-50aa-8efc-19380b2a3a95"
-version = "1.1.22+0"
+version = "3.0.15+1"
 
 [[deps.OpenSpecFun_jll]]
 deps = ["Artifacts", "CompilerSupportLibraries_jll", "JLLWrappers", "Libdl", "Pkg"]
@@ -1617,32 +3008,38 @@ uuid = "efe28fd5-8261-553b-a9e1-b2916fc3738e"
 version = "0.5.5+0"
 
 [[deps.Opus_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
-git-tree-sha1 = "51a08fb14ec28da2ec7a927c4337e4332c2a4720"
+deps = ["Artifacts", "JLLWrappers", "Libdl"]
+git-tree-sha1 = "6703a85cb3781bd5909d48730a67205f3f31a575"
 uuid = "91d4177d-7536-5919-b921-800302f37372"
-version = "1.3.2+0"
+version = "1.3.3+0"
 
 [[deps.OrderedCollections]]
-git-tree-sha1 = "2e73fe17cac3c62ad1aebe70d44c963c3cfdc3e3"
+git-tree-sha1 = "dfdf5519f235516220579f949664f1bf44e741c5"
 uuid = "bac558e1-5e72-5ebc-8fee-abe8a469f55d"
-version = "1.6.2"
+version = "1.6.3"
 
 [[deps.PCRE2_jll]]
 deps = ["Artifacts", "Libdl"]
 uuid = "efcefdf7-47ab-520b-bdef-62a2eaa19f15"
-version = "10.42.0+0"
+version = "10.42.0+1"
 
 [[deps.PDMats]]
 deps = ["LinearAlgebra", "SparseArrays", "SuiteSparse"]
-git-tree-sha1 = "67eae2738d63117a196f497d7db789821bce61d1"
+git-tree-sha1 = "949347156c25054de2db3b166c52ac4728cbad65"
 uuid = "90014a1f-27ba-587c-ab20-58faa44d9150"
-version = "0.11.17"
+version = "0.11.31"
+
+[[deps.Pango_jll]]
+deps = ["Artifacts", "Cairo_jll", "Fontconfig_jll", "FreeType2_jll", "FriBidi_jll", "Glib_jll", "HarfBuzz_jll", "JLLWrappers", "Libdl"]
+git-tree-sha1 = "e127b609fb9ecba6f201ba7ab753d5a605d53801"
+uuid = "36c8627f-9965-5494-a995-c6b170f724f3"
+version = "1.54.1+0"
 
 [[deps.Parsers]]
 deps = ["Dates", "PrecompileTools", "UUIDs"]
-git-tree-sha1 = "716e24b21538abc91f6205fd1d8363f39b442851"
+git-tree-sha1 = "8489905bcdbcfac64d1daa51ca07c0d8f0283821"
 uuid = "69de0a69-1ddd-5017-9359-2bf0b02dc9f0"
-version = "2.7.2"
+version = "2.8.1"
 
 [[deps.Pipe]]
 git-tree-sha1 = "6842804e7867b115ca9de748a0cf6b364523c16d"
@@ -1651,32 +3048,32 @@ version = "1.3.0"
 
 [[deps.Pixman_jll]]
 deps = ["Artifacts", "CompilerSupportLibraries_jll", "JLLWrappers", "LLVMOpenMP_jll", "Libdl"]
-git-tree-sha1 = "64779bc4c9784fee475689a1752ef4d5747c5e87"
+git-tree-sha1 = "35621f10a7531bc8fa58f74610b1bfb70a3cfc6b"
 uuid = "30392449-352a-5448-841d-b1acce4e97dc"
-version = "0.42.2+0"
+version = "0.43.4+0"
 
 [[deps.Pkg]]
 deps = ["Artifacts", "Dates", "Downloads", "FileWatching", "LibGit2", "Libdl", "Logging", "Markdown", "Printf", "REPL", "Random", "SHA", "Serialization", "TOML", "Tar", "UUIDs", "p7zip_jll"]
 uuid = "44cfe95a-1eb2-52ea-b672-e2afdf69b78f"
-version = "1.9.0"
+version = "1.10.0"
 
 [[deps.PlotThemes]]
 deps = ["PlotUtils", "Statistics"]
-git-tree-sha1 = "1f03a2d339f42dca4a4da149c7e15e9b896ad899"
+git-tree-sha1 = "6e55c6841ce3411ccb3457ee52fc48cb698d6fb0"
 uuid = "ccf2f8ad-2431-5c83-bf29-c5338b663b6a"
-version = "3.1.0"
+version = "3.2.0"
 
 [[deps.PlotUtils]]
-deps = ["ColorSchemes", "Colors", "Dates", "PrecompileTools", "Printf", "Random", "Reexport", "Statistics"]
-git-tree-sha1 = "f92e1315dadf8c46561fb9396e525f7200cdc227"
+deps = ["ColorSchemes", "Colors", "Dates", "PrecompileTools", "Printf", "Random", "Reexport", "StableRNGs", "Statistics"]
+git-tree-sha1 = "650a022b2ce86c7dcfbdecf00f78afeeb20e5655"
 uuid = "995b91a9-d308-5afd-9ec6-746e21dbc043"
-version = "1.3.5"
+version = "1.4.2"
 
 [[deps.Plots]]
-deps = ["Base64", "Contour", "Dates", "Downloads", "FFMPEG", "FixedPointNumbers", "GR", "JLFzf", "JSON", "LaTeXStrings", "Latexify", "LinearAlgebra", "Measures", "NaNMath", "Pkg", "PlotThemes", "PlotUtils", "PrecompileTools", "Preferences", "Printf", "REPL", "Random", "RecipesBase", "RecipesPipeline", "Reexport", "RelocatableFolders", "Requires", "Scratch", "Showoff", "SparseArrays", "Statistics", "StatsBase", "UUIDs", "UnicodeFun", "UnitfulLatexify", "Unzip"]
-git-tree-sha1 = "ccee59c6e48e6f2edf8a5b64dc817b6729f99eb5"
+deps = ["Base64", "Contour", "Dates", "Downloads", "FFMPEG", "FixedPointNumbers", "GR", "JLFzf", "JSON", "LaTeXStrings", "Latexify", "LinearAlgebra", "Measures", "NaNMath", "Pkg", "PlotThemes", "PlotUtils", "PrecompileTools", "Printf", "REPL", "Random", "RecipesBase", "RecipesPipeline", "Reexport", "RelocatableFolders", "Requires", "Scratch", "Showoff", "SparseArrays", "Statistics", "StatsBase", "TOML", "UUIDs", "UnicodeFun", "UnitfulLatexify", "Unzip"]
+git-tree-sha1 = "dae01f8c2e069a683d3a6e17bbae5070ab94786f"
 uuid = "91a5bcdd-55d7-5caf-9e0b-520d859cae80"
-version = "1.39.0"
+version = "1.40.9"
 
     [deps.Plots.extensions]
     FileIOExt = "FileIO"
@@ -1694,56 +3091,85 @@ version = "1.39.0"
 
 [[deps.PlutoUI]]
 deps = ["AbstractPlutoDingetjes", "Base64", "ColorTypes", "Dates", "FixedPointNumbers", "Hyperscript", "HypertextLiteral", "IOCapture", "InteractiveUtils", "JSON", "Logging", "MIMEs", "Markdown", "Random", "Reexport", "URIs", "UUIDs"]
-git-tree-sha1 = "bd7c69c7f7173097e7b5e1be07cee2b8b7447f51"
+git-tree-sha1 = "7e71a55b87222942f0f9337be62e26b1f103d3e4"
 uuid = "7f904dfe-b85e-4ff6-b463-dae2292396a8"
-version = "0.7.54"
+version = "0.7.61"
 
 [[deps.PooledArrays]]
 deps = ["DataAPI", "Future"]
-git-tree-sha1 = "a6062fe4063cdafe78f4a0a81cfffb89721b30e7"
+git-tree-sha1 = "36d8b4b899628fb92c2749eb488d884a926614d3"
 uuid = "2dfb63ee-cc39-5dd5-95bd-886bf059d720"
-version = "1.4.2"
+version = "1.4.3"
 
 [[deps.PrecompileTools]]
 deps = ["Preferences"]
-git-tree-sha1 = "9673d39decc5feece56ef3940e5dafba15ba0f81"
+git-tree-sha1 = "5aa36f7049a63a1528fe8f7c3f2113413ffd4e1f"
 uuid = "aea7be01-6a6a-4083-8856-8a6e6704d82a"
-version = "1.1.2"
+version = "1.2.1"
 
 [[deps.Preferences]]
 deps = ["TOML"]
-git-tree-sha1 = "7eb1686b4f04b82f96ed7a4ea5890a4f0c7a09f1"
+git-tree-sha1 = "9306f6085165d270f7e3db02af26a400d580f5c6"
 uuid = "21216c6a-2e73-6563-6e65-726566657250"
-version = "1.4.0"
+version = "1.4.3"
 
 [[deps.PrettyTables]]
 deps = ["Crayons", "LaTeXStrings", "Markdown", "PrecompileTools", "Printf", "Reexport", "StringManipulation", "Tables"]
-git-tree-sha1 = "88b895d13d53b5577fd53379d913b9ab9ac82660"
+git-tree-sha1 = "66b20dd35966a748321d3b2537c4584cf40387c7"
 uuid = "08abe8d2-0d0c-5749-adfa-8a2ac140af0d"
-version = "2.3.1"
+version = "2.3.2"
 
 [[deps.Printf]]
 deps = ["Unicode"]
 uuid = "de0858da-6303-5e67-8744-51eddeeeb8d7"
 
+[[deps.PtrArrays]]
+git-tree-sha1 = "77a42d78b6a92df47ab37e177b2deac405e1c88f"
+uuid = "43287f4e-b6f4-7ad1-bb20-aadabca52c3d"
+version = "1.2.1"
+
 [[deps.Qt6Base_jll]]
-deps = ["Artifacts", "CompilerSupportLibraries_jll", "Fontconfig_jll", "Glib_jll", "JLLWrappers", "Libdl", "Libglvnd_jll", "OpenSSL_jll", "Pkg", "Xorg_libXext_jll", "Xorg_libXrender_jll", "Xorg_libxcb_jll", "Xorg_xcb_util_image_jll", "Xorg_xcb_util_keysyms_jll", "Xorg_xcb_util_renderutil_jll", "Xorg_xcb_util_wm_jll", "Zlib_jll", "xkbcommon_jll"]
-git-tree-sha1 = "364898e8f13f7eaaceec55fd3d08680498c0aa6e"
+deps = ["Artifacts", "CompilerSupportLibraries_jll", "Fontconfig_jll", "Glib_jll", "JLLWrappers", "Libdl", "Libglvnd_jll", "OpenSSL_jll", "Vulkan_Loader_jll", "Xorg_libSM_jll", "Xorg_libXext_jll", "Xorg_libXrender_jll", "Xorg_libxcb_jll", "Xorg_xcb_util_cursor_jll", "Xorg_xcb_util_image_jll", "Xorg_xcb_util_keysyms_jll", "Xorg_xcb_util_renderutil_jll", "Xorg_xcb_util_wm_jll", "Zlib_jll", "libinput_jll", "xkbcommon_jll"]
+git-tree-sha1 = "492601870742dcd38f233b23c3ec629628c1d724"
 uuid = "c0090381-4147-56d7-9ebc-da0b1113ec56"
-version = "6.4.2+3"
+version = "6.7.1+1"
+
+[[deps.Qt6Declarative_jll]]
+deps = ["Artifacts", "JLLWrappers", "Libdl", "Qt6Base_jll", "Qt6ShaderTools_jll"]
+git-tree-sha1 = "e5dd466bf2569fe08c91a2cc29c1003f4797ac3b"
+uuid = "629bc702-f1f5-5709-abd5-49b8460ea067"
+version = "6.7.1+2"
+
+[[deps.Qt6ShaderTools_jll]]
+deps = ["Artifacts", "JLLWrappers", "Libdl", "Qt6Base_jll"]
+git-tree-sha1 = "1a180aeced866700d4bebc3120ea1451201f16bc"
+uuid = "ce943373-25bb-56aa-8eca-768745ed7b5a"
+version = "6.7.1+1"
+
+[[deps.Qt6Wayland_jll]]
+deps = ["Artifacts", "JLLWrappers", "Libdl", "Qt6Base_jll", "Qt6Declarative_jll"]
+git-tree-sha1 = "729927532d48cf79f49070341e1d918a65aba6b0"
+uuid = "e99dba38-086e-5de3-a5b1-6e4c66e897c3"
+version = "6.7.1+1"
 
 [[deps.QuadGK]]
 deps = ["DataStructures", "LinearAlgebra"]
-git-tree-sha1 = "6ec7ac8412e83d57e313393220879ede1740f9ee"
+git-tree-sha1 = "cda3b045cf9ef07a08ad46731f5a3165e56cf3da"
 uuid = "1fd47b50-473d-5c70-9696-f719f8f3bcdc"
-version = "2.8.2"
+version = "2.11.1"
+
+    [deps.QuadGK.extensions]
+    QuadGKEnzymeExt = "Enzyme"
+
+    [deps.QuadGK.weakdeps]
+    Enzyme = "7da242da-08ed-463a-9acd-ee780be4f1d9"
 
 [[deps.REPL]]
 deps = ["InteractiveUtils", "Markdown", "Sockets", "Unicode"]
 uuid = "3fa0cd96-eef1-5676-8a61-b3b8758bbffb"
 
 [[deps.Random]]
-deps = ["SHA", "Serialization"]
+deps = ["SHA"]
 uuid = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 
 [[deps.Ratios]]
@@ -1775,9 +3201,9 @@ version = "1.2.2"
 
 [[deps.RelocatableFolders]]
 deps = ["SHA", "Scratch"]
-git-tree-sha1 = "90bc7a7c96410424509e4263e277e43250c05691"
+git-tree-sha1 = "ffdaf70d81cf6ff22c2b6e733c900c3321cab864"
 uuid = "05181044-ff0b-4ac5-8273-598c1e38db00"
-version = "1.0.0"
+version = "1.0.1"
 
 [[deps.Requires]]
 deps = ["UUIDs"]
@@ -1787,15 +3213,35 @@ version = "1.3.0"
 
 [[deps.Rmath]]
 deps = ["Random", "Rmath_jll"]
-git-tree-sha1 = "f65dcb5fa46aee0cf9ed6274ccbd597adc49aa7b"
+git-tree-sha1 = "852bd0f55565a9e973fcfee83a84413270224dc4"
 uuid = "79098fc4-a85e-5d69-aa6a-4863f24498fa"
-version = "0.7.1"
+version = "0.8.0"
 
 [[deps.Rmath_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
-git-tree-sha1 = "6ed52fdd3382cf21947b15e8870ac0ddbff736da"
+deps = ["Artifacts", "JLLWrappers", "Libdl"]
+git-tree-sha1 = "58cdd8fb2201a6267e1db87ff148dd6c1dbd8ad8"
 uuid = "f50d1b31-88e8-58de-be2c-1cc44531875f"
-version = "0.4.0+0"
+version = "0.5.1+0"
+
+[[deps.Roots]]
+deps = ["Accessors", "CommonSolve", "Printf"]
+git-tree-sha1 = "3a7c7e5c3f015415637f5debdf8a674aa2c979c4"
+uuid = "f2b01f46-fcfa-551c-844a-d8ac1e96c665"
+version = "2.2.1"
+
+    [deps.Roots.extensions]
+    RootsChainRulesCoreExt = "ChainRulesCore"
+    RootsForwardDiffExt = "ForwardDiff"
+    RootsIntervalRootFindingExt = "IntervalRootFinding"
+    RootsSymPyExt = "SymPy"
+    RootsSymPyPythonCallExt = "SymPyPythonCall"
+
+    [deps.Roots.weakdeps]
+    ChainRulesCore = "d360d2e6-b24c-11e9-a2a3-2a2ae2dbcce4"
+    ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
+    IntervalRootFinding = "d2bf35a9-74e0-55ec-b149-d360ff49b807"
+    SymPy = "24249f21-da20-56a4-8eb1-6a02cf4ae2e6"
+    SymPyPythonCall = "bc8888f7-b21e-4b7c-a06a-5d9c9496438c"
 
 [[deps.SHA]]
 uuid = "ea8e919c-243c-51af-8825-aaa63cd721ce"
@@ -1803,15 +3249,15 @@ version = "0.7.0"
 
 [[deps.Scratch]]
 deps = ["Dates"]
-git-tree-sha1 = "30449ee12237627992a99d5e30ae63e4d78cd24a"
+git-tree-sha1 = "3bac05bc7e74a75fd9cba4295cde4045d9fe2386"
 uuid = "6c6a2e73-6563-6170-7368-637461726353"
-version = "1.2.0"
+version = "1.2.1"
 
 [[deps.SentinelArrays]]
 deps = ["Dates", "Random"]
-git-tree-sha1 = "04bdff0b09c65ff3e06a05e3eb7b120223da3d39"
+git-tree-sha1 = "ff11acffdb082493657550959d4feb4b6149e73a"
 uuid = "91c51154-3ec4-41a3-a24f-3f23e20d615c"
-version = "1.4.0"
+version = "1.4.5"
 
 [[deps.Serialization]]
 uuid = "9e88b42a-f829-5b0c-bbe9-9e923198166b"
@@ -1838,104 +3284,116 @@ uuid = "992d4aef-0814-514b-bc4d-f2e9a6c4116f"
 version = "1.0.3"
 
 [[deps.SimpleBufferStream]]
-git-tree-sha1 = "874e8867b33a00e784c8a7e4b60afe9e037b74e1"
+git-tree-sha1 = "f305871d2f381d21527c770d4788c06c097c9bc1"
 uuid = "777ac1f9-54b0-4bf8-805c-2214025038e7"
-version = "1.1.0"
+version = "1.2.0"
 
 [[deps.Sockets]]
 uuid = "6462fe0b-24de-5631-8697-dd941f90decc"
 
 [[deps.SortingAlgorithms]]
 deps = ["DataStructures"]
-git-tree-sha1 = "c60ec5c62180f27efea3ba2908480f8055e17cee"
+git-tree-sha1 = "66e0a8e672a0bdfca2c3f5937efb8538b9ddc085"
 uuid = "a2af1166-a08f-5f64-846c-94a0d3cef48c"
-version = "1.1.1"
+version = "1.2.1"
 
 [[deps.SparseArrays]]
 deps = ["Libdl", "LinearAlgebra", "Random", "Serialization", "SuiteSparse_jll"]
 uuid = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
+version = "1.10.0"
 
 [[deps.SpecialFunctions]]
 deps = ["IrrationalConstants", "LogExpFunctions", "OpenLibm_jll", "OpenSpecFun_jll"]
-git-tree-sha1 = "e2cfc4012a19088254b3950b85c3c1d8882d864d"
+git-tree-sha1 = "2f5d4697f21388cbe1ff299430dd169ef97d7e14"
 uuid = "276daf66-3868-5448-9aa4-cd146d93841b"
-version = "2.3.1"
+version = "2.4.0"
 weakdeps = ["ChainRulesCore"]
 
     [deps.SpecialFunctions.extensions]
     SpecialFunctionsChainRulesCoreExt = "ChainRulesCore"
 
+[[deps.StableRNGs]]
+deps = ["Random"]
+git-tree-sha1 = "83e6cce8324d49dfaf9ef059227f91ed4441a8e5"
+uuid = "860ef19b-820b-49d6-a774-d7a799459cd3"
+version = "1.0.2"
+
 [[deps.StaticArrays]]
-deps = ["LinearAlgebra", "Random", "StaticArraysCore"]
-git-tree-sha1 = "9cabadf6e7cd2349b6cf49f1915ad2028d65e881"
+deps = ["LinearAlgebra", "PrecompileTools", "Random", "StaticArraysCore"]
+git-tree-sha1 = "eeafab08ae20c62c44c8399ccb9354a04b80db50"
 uuid = "90137ffa-7385-5640-81b9-e52037218182"
-version = "1.6.2"
-weakdeps = ["Statistics"]
+version = "1.9.7"
+weakdeps = ["ChainRulesCore", "Statistics"]
 
     [deps.StaticArrays.extensions]
+    StaticArraysChainRulesCoreExt = "ChainRulesCore"
     StaticArraysStatisticsExt = "Statistics"
 
 [[deps.StaticArraysCore]]
-git-tree-sha1 = "36b3d696ce6366023a0ea192b4cd442268995a0d"
+git-tree-sha1 = "192954ef1208c7019899fbf8049e717f92959682"
 uuid = "1e83bf80-4336-4d27-bf5d-d5a4f845583c"
-version = "1.4.2"
+version = "1.4.3"
 
 [[deps.Statistics]]
 deps = ["LinearAlgebra", "SparseArrays"]
 uuid = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
-version = "1.9.0"
+version = "1.10.0"
 
 [[deps.StatsAPI]]
 deps = ["LinearAlgebra"]
-git-tree-sha1 = "45a7769a04a3cf80da1c1c7c60caf932e6f4c9f7"
+git-tree-sha1 = "1ff449ad350c9c4cbc756624d6f8a8c3ef56d3ed"
 uuid = "82ae8749-77ed-4fe6-ae5f-f523153014b0"
-version = "1.6.0"
+version = "1.7.0"
 
 [[deps.StatsBase]]
-deps = ["DataAPI", "DataStructures", "LinearAlgebra", "LogExpFunctions", "Missings", "Printf", "Random", "SortingAlgorithms", "SparseArrays", "Statistics", "StatsAPI"]
-git-tree-sha1 = "1d77abd07f617c4868c33d4f5b9e1dbb2643c9cf"
+deps = ["AliasTables", "DataAPI", "DataStructures", "LinearAlgebra", "LogExpFunctions", "Missings", "Printf", "Random", "SortingAlgorithms", "SparseArrays", "Statistics", "StatsAPI"]
+git-tree-sha1 = "29321314c920c26684834965ec2ce0dacc9cf8e5"
 uuid = "2913bbd2-ae8a-5f71-8c99-4fb6c76f3a91"
-version = "0.34.2"
+version = "0.34.4"
 
 [[deps.StatsFuns]]
 deps = ["HypergeometricFunctions", "IrrationalConstants", "LogExpFunctions", "Reexport", "Rmath", "SpecialFunctions"]
-git-tree-sha1 = "f625d686d5a88bcd2b15cd81f18f98186fdc0c9a"
+git-tree-sha1 = "b423576adc27097764a90e163157bcfc9acf0f46"
 uuid = "4c63d2b9-4356-54db-8cca-17b64c39e42c"
-version = "1.3.0"
+version = "1.3.2"
+weakdeps = ["ChainRulesCore", "InverseFunctions"]
 
     [deps.StatsFuns.extensions]
     StatsFunsChainRulesCoreExt = "ChainRulesCore"
     StatsFunsInverseFunctionsExt = "InverseFunctions"
 
-    [deps.StatsFuns.weakdeps]
-    ChainRulesCore = "d360d2e6-b24c-11e9-a2a3-2a2ae2dbcce4"
-    InverseFunctions = "3587e190-3f89-42d0-90ee-14403ec27112"
-
 [[deps.StatsModels]]
-deps = ["DataAPI", "DataStructures", "LinearAlgebra", "Printf", "REPL", "ShiftedArrays", "SparseArrays", "StatsBase", "StatsFuns", "Tables"]
-git-tree-sha1 = "8cc7a5385ecaa420f0b3426f9b0135d0df0638ed"
+deps = ["DataAPI", "DataStructures", "LinearAlgebra", "Printf", "REPL", "ShiftedArrays", "SparseArrays", "StatsAPI", "StatsBase", "StatsFuns", "Tables"]
+git-tree-sha1 = "9022bcaa2fc1d484f1326eaa4db8db543ca8c66d"
 uuid = "3eaba693-59b7-5ba5-a881-562e759f1c8d"
-version = "0.7.2"
+version = "0.7.4"
 
 [[deps.StatsPlots]]
 deps = ["AbstractFFTs", "Clustering", "DataStructures", "Distributions", "Interpolations", "KernelDensity", "LinearAlgebra", "MultivariateStats", "NaNMath", "Observables", "Plots", "RecipesBase", "RecipesPipeline", "Reexport", "StatsBase", "TableOperations", "Tables", "Widgets"]
-git-tree-sha1 = "9115a29e6c2cf66cf213ccc17ffd61e27e743b24"
+git-tree-sha1 = "3b1dcbf62e469a67f6733ae493401e53d92ff543"
 uuid = "f3b207a7-027a-5e70-b257-86293d7955fd"
-version = "0.15.6"
+version = "0.15.7"
 
 [[deps.StringManipulation]]
-git-tree-sha1 = "46da2434b41f41ac3594ee9816ce5541c6096123"
+deps = ["PrecompileTools"]
+git-tree-sha1 = "a04cabe79c5f01f4d723cc6704070ada0b9d46d5"
 uuid = "892a3eda-7b42-436c-8928-eab12a02cf0e"
-version = "0.3.0"
+version = "0.3.4"
+
+[[deps.StructTypes]]
+deps = ["Dates", "UUIDs"]
+git-tree-sha1 = "159331b30e94d7b11379037feeb9b690950cace8"
+uuid = "856f2bd8-1eba-4b0a-8007-ebc267875bd4"
+version = "1.11.0"
 
 [[deps.SuiteSparse]]
 deps = ["Libdl", "LinearAlgebra", "Serialization", "SparseArrays"]
 uuid = "4607b0f0-06f3-5cda-b6b1-a6196a1729e9"
 
 [[deps.SuiteSparse_jll]]
-deps = ["Artifacts", "Libdl", "Pkg", "libblastrampoline_jll"]
+deps = ["Artifacts", "Libdl", "libblastrampoline_jll"]
 uuid = "bea87d4a-7f5b-5778-9afe-8cc45184846c"
-version = "5.10.1+6"
+version = "7.2.1+1"
 
 [[deps.TOML]]
 deps = ["Dates"]
@@ -1955,10 +3413,10 @@ uuid = "3783bdb8-4a98-5b6b-af9a-565f29a5fe9c"
 version = "1.0.1"
 
 [[deps.Tables]]
-deps = ["DataAPI", "DataValueInterfaces", "IteratorInterfaceExtensions", "LinearAlgebra", "OrderedCollections", "TableTraits", "Test"]
-git-tree-sha1 = "1544b926975372da01227b382066ab70e574a3ec"
+deps = ["DataAPI", "DataValueInterfaces", "IteratorInterfaceExtensions", "OrderedCollections", "TableTraits"]
+git-tree-sha1 = "598cd7c1f68d1e205689b1c2fe65a9f85846f297"
 uuid = "bd369af6-aec1-5ad0-b16a-f7cc5008161c"
-version = "1.10.1"
+version = "1.12.0"
 
 [[deps.Tar]]
 deps = ["ArgTools", "SHA"]
@@ -1976,20 +3434,19 @@ deps = ["InteractiveUtils", "Logging", "Random", "Serialization"]
 uuid = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [[deps.TranscodingStreams]]
-deps = ["Random", "Test"]
-git-tree-sha1 = "9a6ae7ed916312b41236fcef7e0af564ef934769"
+git-tree-sha1 = "0c45878dcfdcfa8480052b6ab162cdd138781742"
 uuid = "3bb67fe8-82b1-5028-8e26-92a6c54297fa"
-version = "0.9.13"
+version = "0.11.3"
 
 [[deps.Tricks]]
-git-tree-sha1 = "aadb748be58b492045b4f56166b5188aa63ce549"
+git-tree-sha1 = "7822b97e99a1672bfb1b49b668a6d46d58d8cbcb"
 uuid = "410a4b4d-49e4-4fbc-ab6d-cb71b17b3775"
-version = "0.1.7"
+version = "0.1.9"
 
 [[deps.URIs]]
-git-tree-sha1 = "b7a5e99f24892b6824a954199a45e9ffcc1c70f0"
+git-tree-sha1 = "67db6cc7b3821e19ebe75791a9dd19c9b1188f2b"
 uuid = "5c2747f8-b7ea-4ff2-ba2e-563bfd36b1d4"
-version = "1.5.0"
+version = "1.5.1"
 
 [[deps.UUIDs]]
 deps = ["Random", "SHA"]
@@ -2006,40 +3463,43 @@ version = "0.4.1"
 
 [[deps.Unitful]]
 deps = ["Dates", "LinearAlgebra", "Random"]
-git-tree-sha1 = "607c142139151faa591b5e80d8055a15e487095b"
+git-tree-sha1 = "d95fe458f26209c66a187b1114df96fd70839efd"
 uuid = "1986cc42-f94f-5a68-af5c-568840ba703d"
-version = "1.16.3"
+version = "1.21.0"
+weakdeps = ["ConstructionBase", "InverseFunctions"]
 
     [deps.Unitful.extensions]
     ConstructionBaseUnitfulExt = "ConstructionBase"
     InverseFunctionsUnitfulExt = "InverseFunctions"
 
-    [deps.Unitful.weakdeps]
-    ConstructionBase = "187b0558-2788-49d3-abe0-74a17ed4e7c9"
-    InverseFunctions = "3587e190-3f89-42d0-90ee-14403ec27112"
-
 [[deps.UnitfulLatexify]]
 deps = ["LaTeXStrings", "Latexify", "Unitful"]
-git-tree-sha1 = "e2d817cc500e960fdbafcf988ac8436ba3208bfd"
+git-tree-sha1 = "975c354fcd5f7e1ddcc1f1a23e6e091d99e99bc8"
 uuid = "45397f5d-5981-4c77-b2b3-fc36d6e9b728"
-version = "1.6.3"
+version = "1.6.4"
 
 [[deps.Unzip]]
 git-tree-sha1 = "ca0969166a028236229f63514992fc073799bb78"
 uuid = "41fe7b60-77ed-43a1-b4f0-825fd5a5650d"
 version = "0.2.0"
 
+[[deps.Vulkan_Loader_jll]]
+deps = ["Artifacts", "JLLWrappers", "Libdl", "Wayland_jll", "Xorg_libX11_jll", "Xorg_libXrandr_jll", "xkbcommon_jll"]
+git-tree-sha1 = "2f0486047a07670caad3a81a075d2e518acc5c59"
+uuid = "a44049a8-05dd-5a78-86c9-5fde0876e88c"
+version = "1.3.243+0"
+
 [[deps.Wayland_jll]]
 deps = ["Artifacts", "EpollShim_jll", "Expat_jll", "JLLWrappers", "Libdl", "Libffi_jll", "Pkg", "XML2_jll"]
-git-tree-sha1 = "ed8d92d9774b077c53e1da50fd81a36af3744c1c"
+git-tree-sha1 = "7558e29847e99bc3f04d6569e82d0f5c54460703"
 uuid = "a2964d1f-97da-50d4-b82a-358c7fce9d89"
-version = "1.21.0+0"
+version = "1.21.0+1"
 
 [[deps.Wayland_protocols_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
-git-tree-sha1 = "4528479aa01ee1b3b4cd0e6faef0e04cf16466da"
+git-tree-sha1 = "93f43ab61b16ddfb2fd3bb13b3ce241cafb0e6c9"
 uuid = "2381bf8a-dfd0-557d-9999-79630e7b1b91"
-version = "1.25.0+0"
+version = "1.31.0+0"
 
 [[deps.WeakRefStrings]]
 deps = ["DataAPI", "InlineStrings", "Parsers"]
@@ -2055,9 +3515,9 @@ version = "0.6.6"
 
 [[deps.WoodburyMatrices]]
 deps = ["LinearAlgebra", "SparseArrays"]
-git-tree-sha1 = "de67fa59e33ad156a590055375a30b23c40299d3"
+git-tree-sha1 = "c1a7aa6219628fcd757dede0ca95e245c5cd9511"
 uuid = "efce3f68-66dc-5838-9240-27a6d6f5f9b6"
-version = "0.5.5"
+version = "1.0.0"
 
 [[deps.WorkerUtilities]]
 git-tree-sha1 = "cd1659ba0d57b71a464a29e64dbc67cfe83d54e7"
@@ -2065,22 +3525,34 @@ uuid = "76eceee3-57b5-4d4a-8e66-0e911cebbf60"
 version = "1.6.1"
 
 [[deps.XML2_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Libiconv_jll", "Pkg", "Zlib_jll"]
-git-tree-sha1 = "93c41695bc1c08c46c5899f4fe06d6ead504bb73"
+deps = ["Artifacts", "JLLWrappers", "Libdl", "Libiconv_jll", "Zlib_jll"]
+git-tree-sha1 = "1165b0443d0eca63ac1e32b8c0eb69ed2f4f8127"
 uuid = "02c8fc9c-b97f-50b9-bbe4-9be30ff0a78a"
-version = "2.10.3+0"
+version = "2.13.3+0"
 
 [[deps.XSLT_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Libgcrypt_jll", "Libgpg_error_jll", "Libiconv_jll", "Pkg", "XML2_jll", "Zlib_jll"]
-git-tree-sha1 = "91844873c4085240b95e795f692c4cec4d805f8a"
+deps = ["Artifacts", "JLLWrappers", "Libdl", "Libgcrypt_jll", "Libgpg_error_jll", "Libiconv_jll", "XML2_jll", "Zlib_jll"]
+git-tree-sha1 = "a54ee957f4c86b526460a720dbc882fa5edcbefc"
 uuid = "aed1982a-8fda-507f-9586-7b0439959a61"
-version = "1.1.34+0"
+version = "1.1.41+0"
 
 [[deps.XZ_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl"]
-git-tree-sha1 = "cf2c7de82431ca6f39250d2fc4aacd0daa1675c0"
+git-tree-sha1 = "ac88fb95ae6447c8dda6a5503f3bafd496ae8632"
 uuid = "ffd25f8a-64ca-5728-b0f7-c24cf3aae800"
-version = "5.4.4+0"
+version = "5.4.6+0"
+
+[[deps.Xorg_libICE_jll]]
+deps = ["Artifacts", "JLLWrappers", "Libdl"]
+git-tree-sha1 = "326b4fea307b0b39892b3e85fa451692eda8d46c"
+uuid = "f67eecfb-183a-506d-b269-f58e52b52d7c"
+version = "1.1.1+0"
+
+[[deps.Xorg_libSM_jll]]
+deps = ["Artifacts", "JLLWrappers", "Libdl", "Xorg_libICE_jll"]
+git-tree-sha1 = "3796722887072218eabafb494a13c963209754ce"
+uuid = "c834827a-8449-5923-a945-d239c165b7dd"
+version = "1.2.4+0"
 
 [[deps.Xorg_libX11_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Xorg_libxcb_jll", "Xorg_xtrans_jll"]
@@ -2107,10 +3579,10 @@ uuid = "a3789734-cfe1-5b06-b2d0-1dd0d9d62d05"
 version = "1.1.4+0"
 
 [[deps.Xorg_libXext_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg", "Xorg_libX11_jll"]
-git-tree-sha1 = "b7c0aa8c376b31e4852b360222848637f481f8c3"
+deps = ["Artifacts", "JLLWrappers", "Libdl", "Xorg_libX11_jll"]
+git-tree-sha1 = "d2d1a5c49fae4ba39983f63de6afcbea47194e85"
 uuid = "1082639a-0dae-5f34-9b06-72781eeb8cb3"
-version = "1.3.4+4"
+version = "1.3.6+0"
 
 [[deps.Xorg_libXfixes_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg", "Xorg_libX11_jll"]
@@ -2137,10 +3609,10 @@ uuid = "ec84b674-ba8e-5d96-8ba1-2a689ba10484"
 version = "1.5.2+4"
 
 [[deps.Xorg_libXrender_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg", "Xorg_libX11_jll"]
-git-tree-sha1 = "19560f30fd49f4d4efbe7002a1037f8c43d43b96"
+deps = ["Artifacts", "JLLWrappers", "Libdl", "Xorg_libX11_jll"]
+git-tree-sha1 = "47e45cd78224c53109495b3e324df0c37bb61fbe"
 uuid = "ea2f1a96-1ddc-540d-b46f-429655e07cfa"
-version = "0.9.10+4"
+version = "0.9.11+0"
 
 [[deps.Xorg_libpthread_stubs_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl"]
@@ -2150,15 +3622,21 @@ version = "0.1.1+0"
 
 [[deps.Xorg_libxcb_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "XSLT_jll", "Xorg_libXau_jll", "Xorg_libXdmcp_jll", "Xorg_libpthread_stubs_jll"]
-git-tree-sha1 = "b4bfde5d5b652e22b9c790ad00af08b6d042b97d"
+git-tree-sha1 = "bcd466676fef0878338c61e655629fa7bbc69d8e"
 uuid = "c7cfdc94-dc32-55de-ac96-5a1b8d977c5b"
-version = "1.15.0+0"
+version = "1.17.0+0"
 
 [[deps.Xorg_libxkbfile_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Xorg_libX11_jll"]
 git-tree-sha1 = "730eeca102434283c50ccf7d1ecdadf521a765a4"
 uuid = "cc61e674-0454-545c-8b26-ed2c68acab7a"
 version = "1.1.2+0"
+
+[[deps.Xorg_xcb_util_cursor_jll]]
+deps = ["Artifacts", "JLLWrappers", "Libdl", "Xorg_xcb_util_image_jll", "Xorg_xcb_util_jll", "Xorg_xcb_util_renderutil_jll"]
+git-tree-sha1 = "04341cb870f29dcd5e39055f895c39d016e18ccd"
+uuid = "e920d4aa-a673-5f3a-b3d7-f755a4d47c43"
+version = "0.1.4+0"
 
 [[deps.Xorg_xcb_util_image_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg", "Xorg_xcb_util_jll"]
@@ -2211,64 +3689,106 @@ version = "1.5.0+0"
 [[deps.Zlib_jll]]
 deps = ["Libdl"]
 uuid = "83775a58-1f1d-513f-b197-d71354ab007a"
-version = "1.2.13+0"
+version = "1.2.13+1"
 
 [[deps.Zstd_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl"]
-git-tree-sha1 = "49ce682769cd5de6c72dcf1b94ed7790cd08974c"
+git-tree-sha1 = "555d1076590a6cc2fdee2ef1469451f872d8b41b"
 uuid = "3161d3a3-bdf6-5164-811a-617609db77b4"
-version = "1.5.5+0"
+version = "1.5.6+1"
+
+[[deps.eudev_jll]]
+deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg", "gperf_jll"]
+git-tree-sha1 = "431b678a28ebb559d224c0b6b6d01afce87c51ba"
+uuid = "35ca27e7-8b34-5b7f-bca9-bdc33f59eb06"
+version = "3.2.9+0"
 
 [[deps.fzf_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
-git-tree-sha1 = "868e669ccb12ba16eaf50cb2957ee2ff61261c56"
+deps = ["Artifacts", "JLLWrappers", "Libdl"]
+git-tree-sha1 = "936081b536ae4aa65415d869287d43ef3cb576b2"
 uuid = "214eeab7-80f7-51ab-84ad-2988db7cef09"
-version = "0.29.0+0"
+version = "0.53.0+0"
+
+[[deps.gperf_jll]]
+deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
+git-tree-sha1 = "3516a5630f741c9eecb3720b1ec9d8edc3ecc033"
+uuid = "1a1c6b14-54f6-533d-8383-74cd7377aa70"
+version = "3.1.1+0"
 
 [[deps.libaom_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
-git-tree-sha1 = "3a2ea60308f0996d26f1e5354e10c24e9ef905d4"
+deps = ["Artifacts", "JLLWrappers", "Libdl"]
+git-tree-sha1 = "1827acba325fdcdf1d2647fc8d5301dd9ba43a9d"
 uuid = "a4ae2306-e953-59d6-aa16-d00cac43593b"
-version = "3.4.0+0"
+version = "3.9.0+0"
 
 [[deps.libass_jll]]
-deps = ["Artifacts", "Bzip2_jll", "FreeType2_jll", "FriBidi_jll", "HarfBuzz_jll", "JLLWrappers", "Libdl", "Pkg", "Zlib_jll"]
-git-tree-sha1 = "5982a94fcba20f02f42ace44b9894ee2b140fe47"
+deps = ["Artifacts", "Bzip2_jll", "FreeType2_jll", "FriBidi_jll", "HarfBuzz_jll", "JLLWrappers", "Libdl", "Zlib_jll"]
+git-tree-sha1 = "e17c115d55c5fbb7e52ebedb427a0dca79d4484e"
 uuid = "0ac62f75-1d6f-5e53-bd7c-93b484bb37c0"
-version = "0.15.1+0"
+version = "0.15.2+0"
 
 [[deps.libblastrampoline_jll]]
 deps = ["Artifacts", "Libdl"]
 uuid = "8e850b90-86db-534c-a0d3-1478176c7d93"
-version = "5.7.0+0"
+version = "5.8.0+1"
+
+[[deps.libdecor_jll]]
+deps = ["Artifacts", "Dbus_jll", "JLLWrappers", "Libdl", "Libglvnd_jll", "Pango_jll", "Wayland_jll", "xkbcommon_jll"]
+git-tree-sha1 = "9bf7903af251d2050b467f76bdbe57ce541f7f4f"
+uuid = "1183f4f0-6f2a-5f1a-908b-139f9cdfea6f"
+version = "0.2.2+0"
+
+[[deps.libevdev_jll]]
+deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
+git-tree-sha1 = "141fe65dc3efabb0b1d5ba74e91f6ad26f84cc22"
+uuid = "2db6ffa8-e38f-5e21-84af-90c45d0032cc"
+version = "1.11.0+0"
 
 [[deps.libfdk_aac_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
-git-tree-sha1 = "daacc84a041563f965be61859a36e17c4e4fcd55"
+deps = ["Artifacts", "JLLWrappers", "Libdl"]
+git-tree-sha1 = "8a22cf860a7d27e4f3498a0fe0811a7957badb38"
 uuid = "f638f0a6-7fb0-5443-88ba-1cc74229b280"
-version = "2.0.2+0"
+version = "2.0.3+0"
+
+[[deps.libinput_jll]]
+deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg", "eudev_jll", "libevdev_jll", "mtdev_jll"]
+git-tree-sha1 = "ad50e5b90f222cfe78aa3d5183a20a12de1322ce"
+uuid = "36db933b-70db-51c0-b978-0f229ee0e533"
+version = "1.18.0+0"
 
 [[deps.libpng_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg", "Zlib_jll"]
-git-tree-sha1 = "94d180a6d2b5e55e447e2d27a29ed04fe79eb30c"
+deps = ["Artifacts", "JLLWrappers", "Libdl", "Zlib_jll"]
+git-tree-sha1 = "b70c870239dc3d7bc094eb2d6be9b73d27bef280"
 uuid = "b53b4c65-9356-5827-b1ea-8c7a1a84506f"
-version = "1.6.38+0"
+version = "1.6.44+0"
 
 [[deps.libvorbis_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Ogg_jll", "Pkg"]
-git-tree-sha1 = "b910cb81ef3fe6e78bf6acee440bda86fd6ae00c"
+git-tree-sha1 = "490376214c4721cdaca654041f635213c6165cb3"
 uuid = "f27f6e37-5d2b-51aa-960f-b287f2bc3b7a"
-version = "1.3.7+1"
+version = "1.3.7+2"
+
+[[deps.mtdev_jll]]
+deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
+git-tree-sha1 = "814e154bdb7be91d78b6802843f76b6ece642f11"
+uuid = "009596ad-96f7-51b1-9f1b-5ce2d5e8a71e"
+version = "1.1.6+0"
 
 [[deps.nghttp2_jll]]
 deps = ["Artifacts", "Libdl"]
 uuid = "8e850ede-7688-5339-a07c-302acd2aaf8d"
-version = "1.48.0+0"
+version = "1.52.0+1"
+
+[[deps.oneTBB_jll]]
+deps = ["Artifacts", "JLLWrappers", "Libdl"]
+git-tree-sha1 = "7d0ea0f4895ef2f5cb83645fa689e52cb55cf493"
+uuid = "1317d2d5-d96f-522e-a858-c73665f53c3e"
+version = "2021.12.0+0"
 
 [[deps.p7zip_jll]]
 deps = ["Artifacts", "Libdl"]
 uuid = "3f19e933-33d8-53b3-aaab-bd5110c3b7a0"
-version = "17.4.0+0"
+version = "17.4.0+2"
 
 [[deps.x264_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
@@ -2284,9 +3804,9 @@ version = "3.5.0+0"
 
 [[deps.xkbcommon_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg", "Wayland_jll", "Wayland_protocols_jll", "Xorg_libxcb_jll", "Xorg_xkeyboard_config_jll"]
-git-tree-sha1 = "9ebfc140cc56e8c2156a15ceac2f0302e327ac0a"
+git-tree-sha1 = "9c304562909ab2bab0262639bd4f444d7bc2be37"
 uuid = "d8fb68d0-12a3-5cfd-a85a-d49703b185fd"
-version = "1.4.1+0"
+version = "1.4.1+1"
 """
 
 # ╔═╡ Cell order:
@@ -2294,19 +3814,20 @@ version = "1.4.1+0"
 # ╟─f2a22774-dd59-485d-934d-15aa4568d379
 # ╠═0cdaa10d-e72a-4b41-8e41-860317ced277
 # ╠═48c90554-bc23-4e44-a050-4bce892614a2
-# ╠═f40e149b-5bbc-45ed-9262-0b74c52cb19f
 # ╟─d734cb56-6da3-4d2f-8bca-a804bba0ba35
-# ╟─17af9a85-0159-4c0a-b2f7-2dfb5e15bbbb
-# ╠═5e79a910-f5b8-46ff-a5cb-d9204ff54cb6
+# ╠═17af9a85-0159-4c0a-b2f7-2dfb5e15bbbb
+# ╟─5e79a910-f5b8-46ff-a5cb-d9204ff54cb6
+# ╠═d56e6ef8-24cc-4afc-a155-5d411c3b9422
 # ╠═e274212a-ef60-4258-930e-32d6d27f1e36
+# ╟─eb3faf69-cab0-45d7-9484-28ab4963ed9c
 # ╠═020695a4-61ee-49f5-8e39-4256ca836183
+# ╟─3595bf88-4dbf-4c63-90e5-2feae1b78760
 # ╠═ae59d379-b47d-41fc-8958-4e9e1941b528
 # ╠═d1b9d2b9-6b08-4d81-8042-26bddf8f5e54
 # ╟─9fe20fcc-8de8-4f4c-aff2-214797c40ba0
 # ╟─89809ea8-94a4-4158-8f23-b4a2322532b2
 # ╠═db52e7c0-5a8c-454a-bf1e-df9d377eff25
 # ╠═f5a31896-eeb0-4a49-9178-3995fde42a55
-# ╠═0876e2d6-53b1-464d-9feb-48e34df65712
 # ╟─838b64cb-5719-4a82-94e0-9bd3f5e18598
 # ╠═e530627f-4fa8-4006-b119-55f9efe72d21
 # ╠═018fc44f-0e6b-4eb2-8b17-4ee61015fb7c
@@ -2315,7 +3836,6 @@ version = "1.4.1+0"
 # ╠═154f4210-a584-4040-9c03-3c9c51c467bd
 # ╠═3af8f75f-0c94-4b4a-af8b-14d90585bd25
 # ╠═263c6114-ee34-4da6-8466-5d7bd50dfd03
-# ╠═4da11521-ba51-406a-ae1e-02d9355fbc29
 # ╠═3b1bd823-83bb-4630-be82-26b08c90f45a
 # ╠═bbc95bb1-a296-4409-93be-ecf3c83c1153
 # ╠═e1f28ccb-e252-4b44-95a3-4ffce7d45455
@@ -2327,44 +3847,94 @@ version = "1.4.1+0"
 # ╠═3473d761-f57f-4d3f-beba-a8a516041da5
 # ╠═07d4b3f0-d37e-4b5a-ae8f-46033e57b112
 # ╠═76c14688-0be1-43a5-932e-352ebac308b4
-# ╠═700b9f2a-1e4d-4d30-a57e-06f067d2db93
 # ╠═6b11b88f-66e4-4630-a9a0-bc479cda43e1
-# ╠═ac217227-a672-4f9c-80ff-277c57e473f9
-# ╠═5a356040-ef21-412f-a129-1723dd1608c7
-# ╠═54e2dd01-1682-4f5d-ac35-35dd3cc084c9
+# ╠═bf4bc3ca-2137-45bc-a8fa-5e43594c366c
+# ╟─ac217227-a672-4f9c-80ff-277c57e473f9
+# ╠═49caf4c1-1ca2-483e-bfa7-36b98f3589be
 # ╠═8e883748-effd-4898-b6ea-24de538fc5e8
 # ╠═c5b02891-e561-4667-a07b-a29f52bb66c4
 # ╠═264627a8-4975-4b75-b4de-136d9861aa0e
 # ╟─75609282-c67c-4794-a68b-94d32c004783
 # ╠═46c4e7cd-7d8a-49b7-abdd-1347692dcfd8
+# ╠═acad36c9-c463-47c2-9277-efea563847df
 # ╠═d04fad13-2fe2-4fa2-8528-24de8dafbbad
+# ╠═c0be60c9-6bd7-42c0-ab89-2a888873a024
 # ╠═f4f1cf08-4843-46ee-9da2-529b40321c94
-# ╠═62deee04-af96-486a-a5fb-d8c9fbf4db5e
-# ╠═c21c2ffd-e195-4dd3-a4b1-8aaf76575d4f
-# ╠═a48a0a1a-403b-4e3c-9ce6-618a1ceb1eaa
 # ╠═f4e1159d-37ac-47b0-89ff-a9581aa3875f
 # ╠═848150e8-f3ed-4324-9964-8a6ada5df1ce
 # ╠═045d019e-9817-4bcc-8af8-6882ad43c615
+# ╠═47ca6697-a1f3-49ee-a8b8-b2938d1fe1a4
+# ╠═ecbebaf3-95b9-44e4-bd33-84d278ed1c06
+# ╠═22002a9b-e812-4148-846c-2debbe47b9f3
 # ╠═aab6bedd-c076-491f-b590-852f179e860b
+# ╠═7d062d2d-fec4-459a-840d-8b678f624c6c
 # ╠═0406bc8a-6054-4b40-9b87-be632dc28d32
 # ╠═6913d517-e07c-4962-9c6b-d090b1bb8faa
-# ╠═ef4e30fb-e345-49df-9569-83b523cb1207
-# ╠═e19c5b78-95ac-4faf-b0a2-758aad46739a
 # ╠═49654852-af74-468f-9ddd-cefa4f055907
 # ╠═6d4a626d-69a3-4538-8d6e-30e22a3e51ed
-# ╠═5d562554-9112-4856-b7a4-5e8ff22ea3d5
-# ╠═acb055d8-44b0-45f9-989c-0e33fa8f86d5
+# ╟─fb63d204-e954-4813-bdc5-b02b67c080c5
+# ╟─cd9c2bd6-50d2-4832-b35d-d4c40891d5e8
+# ╟─34a57d0f-b3f3-4ed3-9988-0fe50a7c4764
+# ╠═76063b20-0848-4fd3-9e53-d76149d3d115
+# ╟─6801d499-e203-45e3-b6a1-6e2878779787
+# ╟─d207a342-af32-4d36-b7d9-41505345ef87
+# ╠═73f5e706-d9c4-4d3e-b9bd-cd24c1b29dba
+# ╠═409e45a7-79a9-429b-9889-de843dac49a7
+# ╠═8e7dea67-d49a-442d-a76e-6bbd7172ebcc
+# ╠═55ea71af-8398-40bf-858d-1a039f20201f
+# ╠═a1941c4d-28f9-4f25-a3ad-350324003a33
+# ╟─e868b491-2463-4e0a-a7be-60f896eed14f
+# ╟─74c94058-4c91-4a7b-8060-29e4ac6104c2
+# ╟─6e6c10a4-1fc2-4b82-a619-608100d110f2
+# ╟─deef8546-317e-40c9-8992-b721e7e091e9
+# ╟─a06b25e1-6897-4aab-bc5a-32b8bc29ebf7
+# ╠═3d45676a-8105-4e69-a520-605ee9cca2d1
+# ╠═7b9dfaec-9bd3-4608-a932-6c7bf2e6f019
+# ╟─d8b6dba6-aeb8-4d49-bf49-e576338f08e3
+# ╟─230869e6-0f06-4757-aac3-31dbf883f334
+# ╠═82ccaaa0-f5d7-4c1f-93bc-37da45b2b048
+# ╠═72a99203-ff45-477f-8258-b4da6bf96dab
+# ╠═1e247533-a600-40e1-beeb-f2ade77a4998
+# ╠═4cb72574-9b2a-4482-b12e-642eb137c0d1
+# ╠═cbeeec75-64bb-4507-aa33-df9b1b90cad1
+# ╠═f5988ab9-9fb4-4209-837c-ec6328430307
+# ╟─59a25151-b64c-44f5-b3a0-0ad7d5697fc8
+# ╠═e4ef2843-07dc-4f7f-ade6-acef5612cb52
+# ╠═6846cf1f-9a49-4731-8552-189b8c095833
+# ╠═d2c0d96e-ead0-4ba2-adc0-585cf161bb64
+# ╠═72d1dc70-cc6e-46b1-a9e5-1140a24cf6fc
+# ╠═53243445-6771-45bf-9b7e-4943cf8cef20
+# ╠═e533eb73-dfaf-4928-9be6-72340edca990
+# ╟─5d562554-9112-4856-b7a4-5e8ff22ea3d5
 # ╠═2cc166c0-464b-41a4-be91-44d936f1eedf
 # ╠═4a5f18c6-3c6a-40f5-ad18-d1c46048ed3d
 # ╠═c1c5b1ac-fd5c-4734-aa9a-cfc18b640eea
 # ╠═9a86e6d3-9e4c-4d14-b53f-81aba7e0e362
-# ╠═da33cd4a-7eec-4437-b31e-eabd91f5a8ae
+# ╟─da33cd4a-7eec-4437-b31e-eabd91f5a8ae
 # ╠═4c56ee27-9a31-47e7-9959-05c342b0c4d2
 # ╠═2a4020e5-e353-4ca6-8b18-057c495209a6
-# ╠═60b8b0bb-f8de-49b5-98f3-1b6c26453344
-# ╠═0a29cbe6-603c-4749-acb5-a0fb42c3eb7b
-# ╠═5c3d36a8-7982-41e3-8bc0-e36734e6ed0d
-# ╠═b9b953ef-6ed2-4128-b234-8cf5e50be7dc
-# ╠═c9bbb25e-7f3a-4218-8ab0-46fb0f83637f
+# ╟─93fbf31a-333b-4ce1-b4ec-e601146be8e2
+# ╟─1d4fc3cc-d3c3-4b98-8b01-fd99a986a766
+# ╟─2f35259b-b297-4e2f-a535-7d48d0d01873
+# ╠═ac5548e8-093b-496e-b742-eb12f0588a6c
+# ╠═ac0eafdc-8b05-480a-ac82-4b7a9bdf4530
+# ╠═4cf8a75a-9838-4049-90ee-92028f9cf545
+# ╠═3766c2a6-4540-485a-b98d-07622c1f159b
+# ╠═2385ec55-60b2-44df-8c6f-a4de7f6da443
+# ╠═06311e0c-129d-4485-8599-70e89c4806e0
+# ╟─67552873-5276-4955-9dff-358eaf9c390a
+# ╠═2d686363-8f9a-48dc-bfba-9535e7b73d70
+# ╠═fc318b5f-baa4-4683-a31e-c869543043e8
+# ╠═74657565-b504-4360-9073-3d67e7d52099
+# ╠═24d9a027-28f9-4eec-9be4-d6aba07ce202
+# ╠═3d57920f-b46e-4cf9-8c4d-0b1624a166dd
+# ╠═c35b719f-742b-4c85-b83d-71e6c98575cf
+# ╠═1cb9ec34-8474-4af3-8877-87b396262ccf
+# ╠═3b2571ec-9e79-42c6-bcc8-c8e395506e17
+# ╠═98df9486-a69b-4280-ba6c-2b12106b989d
+# ╠═45c00bda-bc4c-43fd-9976-897cad5fe77e
+# ╠═dca14b2e-bb63-4f1d-97f5-ac221c40b62e
+# ╠═bcc0c25c-9f53-4dff-8da7-352a29a66852
+# ╠═0ba23046-f3b8-4c26-83d3-e06744c50587
 # ╟─00000000-0000-0000-0000-000000000001
 # ╟─00000000-0000-0000-0000-000000000002
