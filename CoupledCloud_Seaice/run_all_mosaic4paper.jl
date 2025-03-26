@@ -22,10 +22,10 @@ using ATMOStools
 const CAMPAIGN = "utqiagvik-nsa" # "arctic-mosaic" #
 const DATA_PATH = "/projekt2/ac3data/B07-data" #joinpath(homedir(), "LIM/data/B07")
 const LPR_PATH = joinpath(DATA_PATH, "LP")
-const CLNET_PATH = joinpath(DATA_PATH, CAMPAIGN, "CloudNet","1.8.0", "output")
+const CLNET_PATH = joinpath(DATA_PATH, CAMPAIGN, "CloudNet","1.9.0", "output")
 const CLNET_PRODUCT = "CEIL10m" # "TROPOS/processed/categorize"
 const RS_PATH = joinpath("/projekt2/remsens/data_new/site-campaign", CAMPAIGN)
-const OUT_CSV = joinpath(DATA_PATH, CAMPAIGN, "csv_nsa")
+const OUT_CSV = joinpath(DATA_PATH, CAMPAIGN, "csv_nsa") 
 
 include("tmp_auxfiles.jl");
 
@@ -43,9 +43,9 @@ if ADDAOI
 end
 
 
-winter_jahr = 2012:2021;
+winter_jahr = 2011:2011;
 #( (winter_jahr,11), (winter_jahr,12), (,1), (2019,2), (2019,3), (2019,4))
-days = (1:31) #21  #18 #28 #6
+days = (1:31) #,21,22,23,24,25,26,27,28,29,30) #21  #18 #28 #6
 
 !isempty(ARGS) && foreach(ARGS) do argin
 	ex = Meta.parse(argin)
@@ -53,6 +53,7 @@ days = (1:31) #21  #18 #28 #6
 end
 
 datum = [Date(yy, 11)+Month(m) for yy ∈ winter_jahr for m ∈ 0:5]
+#datum = [Date(2024,4)] #, Date(2024,3), Date(2024,4)]
 
 for heute in datum
     yy, mm = year(heute), month(heute)
@@ -89,7 +90,15 @@ for heute in datum
 
         # Reading ARM microwave radiometer file:
         mwr = let nfile=ARMtools.getFilePattern(RS_PATH, "MWR/RET", yy, mm, dd)
-            tmp = !isnothing(nfile) && ARMtools.getMWRData(nfile, onlyvars=["surface_temp"],addvars=["surface_pres"]) 
+            tmp = if !isnothing(nfile)
+                ARMtools.getMWRData(nfile, onlyvars=["surface_temp"],addvars=["surface_pres"]) 
+            else
+                # if MWR/RET is not available, trying with RADFLUX data:
+                #nfile=ARMtools.getFilePattern(RS_PATH, "MWR/LOS", yy, mm, dd)
+                nfile = joinpath(RS_PATH, "RADFLUX")
+                tmp = !isnothing(nfile) && ARMtools.read_radflux(nfile,Date(yy,mm,dd), onlyvars=["air_temperature"],addvars=["pressure"])
+                Dict(:time=>tmp[:time], :SFT=>tmp[:T_air], :SURFACE_PRES=>tmp[:PRESSURE])
+            end
             #sonde_times"]) # 20210123 on sonde_launch_status
             # interpolating to radiosonde time resolution:
             if !isnothing(nfile)
@@ -157,6 +166,7 @@ for heute in datum
         end
 
         # 8. Calculating layer-base LWP and IWP from Cloudnet:
+        # 8.1 Liquid water path integrated over the cloud layeer closest to max_WVT:
         LWP = let 𝐼=fill(NaN32, size(CBH))
             for i ∈ 1:size(CBH,2)
                 X = ∫fdh(1f3LWC[:lwc], LWC[:height],
@@ -165,7 +175,7 @@ for heute in datum
             end
             𝐼
         end;
-
+        # 8.2 Ice water path integrated over the cloud layer closest to max_WVT:
         IWP = let 𝐼=fill(NaN32, size(CBH))
             for i ∈ 1:size(CBH,2)
                 X = ∫fdh(1f3IWC[:iwc], IWC[:height],
@@ -174,6 +184,12 @@ for heute in datum
             end
             𝐼
         end;
+        
+        # 8.3 Measured LWP from the radiometer direcly: (NOT YET IMPLEMENTED!!!)
+        mwrLWP = let X=fill(NaN32, size(LWP))
+            X[idxtclnt] = replace(LWC[:LWP], missing=>NaN32)
+            vec(X)
+        end
 
         # 9. Calculating layer weighted average effective radius for droplets and ice particles:
         Reff = let fdrop=ARMtools.getFilePattern(CLNET_PATH, CLNET_PRODUCT, yy, mm, dd, fileext="der.nc")
@@ -257,7 +273,7 @@ for heute in datum
                                      decoH=vec(decop_hgt[idx]),
                                      decoT=vec(topdecop_hgt[idx]),
                                      coupled=ϑ_flag,
-                                     aoi=aoi.aoi)
+                                     aoi=aoi.aoi) #mwrlwp=mwrLWP)
                  )
 
     end  # over days
