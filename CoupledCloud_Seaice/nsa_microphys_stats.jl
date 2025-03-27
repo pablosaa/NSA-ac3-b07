@@ -140,13 +140,13 @@ begin
 
 		# When Liquid and Ice waterpath is below 5 g m⁻² then is considered 0 (retrieval minimum detection):
 		#ii = findall((tmp.lwp .< 5) .&& (tmp.iwp .<5))
-        ii = findall(tmp.lwp .> 1000 .|| tmp.lwp .< 5)
-        tmp.lwp[ii] .= NaN32 #0.0
-		ii = findall(tmp.iwp .> 1000 .|| tmp.iwp .< 5)
-        tmp.iwp[ii] .= NaN32 #0.0
+        #ii = findall(tmp.lwp .> 1000 .|| tmp.lwp .< 5)
+        #tmp.lwp[ii] .= NaN32 #0.0
+		#ii = findall(tmp.iwp .> 1000 .|| tmp.iwp .< 5)
+        #tmp.iwp[ii] .= NaN32 #0.0
 			
-		#filter!(d-> 5< d.iwp ≤ 1f3, tmp) # || 5<d.iwp<1f3, tmp)
-		#filter!(d-> 5< d.lwp ≤ 700, tmp)
+		filter!(d-> 5 ≤ d.lwp ≤ 7f2 || 5 ≤ d.iwp ≤ 1f3, tmp) # || 5<d.iwp<1f3, tmp)
+		
 		tmp
     end;
 	# Computing Optical thickness τc:
@@ -723,9 +723,6 @@ rfit[:co][:H][:μlwp].param, rfit[:de][:H][:μlwp].param
 #savefig(cc, "/home/psgarfias/Downloads/quicklooks/nsa/$(wintertime)_HL_MicPhys_SIC.png")
 #savefig(cc, "/home/psgarfias/Downloads/quicklooks/nsa/$(wintertime)_HL_MacPhys_SIC.png")
 
-# ╔═╡ 0406bc8a-6054-4b40-9b87-be632dc28d32
-@df filter(d->d.σSIC>(0), DB) groupedboxplot(:winter, :σSIC./:μSIC, group=:coupled, bar_width=0.4, outliers=false, fillcolor=farben, label=["de" "co"], ylabel="LWP", size=(850,400))
-
 # ╔═╡ 6913d517-e07c-4962-9c6b-d090b1bb8faa
 # Creating the string for winter label like 2023/24 for the wintertime 2023 to 2024:
 #strwinter = [@sprintf("%04d/%02d", jj, (jj+1)-2000) for jj in jahren[1:end-1,1]];
@@ -734,10 +731,10 @@ strwinter = [@sprintf("%02d/%02d", jj-2000, (jj+1)-2000) for jj in jahren[1:end-
 # ╔═╡ 49654852-af74-468f-9ddd-cefa4f055907
 begin
 	var_meta = Dict(
-		:lwp=>(unit="g m⁻²", labe="LWP", lege=L"\rm{\overline{LWP}}", lim=(1,200), stats=:geometric),
-		:iwp=>(unit="g m⁻²", labe="IWP", lege=L"\rm{\overline{IWP}}", lim=(0.1, 125), stats=:geometric),
-		:der=>(unit="μm", labe="Droplet  "*L"r_{eff}", lege=L"\overline{r_{eff}}", lim=(3,22), stats=:geometric),
-		:ier=>(unit="μm", labe="Ice  "*L"r_{eff}", lege=L"\overline{r_{eff}}", lim=(28,55), stats=:geometric),
+		:lwp=>(unit="g m⁻²", labe="LWP", lege=L"\rm{\overline{LWP}}", lim=(1,250), stats=:geometric),
+		:iwp=>(unit="g m⁻²", labe="IWP", lege=L"\rm{\overline{IWP}}", lim=(0.01, 130), stats=:geometric),
+		:der=>(unit="μm", labe="Droplet  "*L"r_{eff}", lege=L"\overline{r_{eff}}", lim=(7, 30), stats=:geometric),
+		:ier=>(unit="μm", labe="Ice  "*L"r_{eff}", lege=L"\overline{r_{eff}}", lim=(35,55), stats=:geometric),
 		:T2m=>(unit="K", labe=L"\rm{T_{2m}}", lege=L"\rm{\overline{T_{2m}}}", lim=(240,274), stats=:aritmetic),
 		:Γ=>(unit="K km⁻¹", labe=L"Γ_{\textrm{cloud}}", lege=L"\overline{Γ}_\textrm{cloud}", lim=(-8,12.0), stats=:aritmetic),
 		:δₕ=>(unit="m", labe="Cloud depth ", lege=L"\delta H_\textrm{cloud}", lim=(50, 1f4), stats=:aritmetic),
@@ -3868,7 +3865,6 @@ version = "1.4.1+1"
 # ╠═22002a9b-e812-4148-846c-2debbe47b9f3
 # ╠═aab6bedd-c076-491f-b590-852f179e860b
 # ╠═7d062d2d-fec4-459a-840d-8b678f624c6c
-# ╠═0406bc8a-6054-4b40-9b87-be632dc28d32
 # ╠═6913d517-e07c-4962-9c6b-d090b1bb8faa
 # ╠═49654852-af74-468f-9ddd-cefa4f055907
 # ╠═6d4a626d-69a3-4538-8d6e-30e22a3e51ed
