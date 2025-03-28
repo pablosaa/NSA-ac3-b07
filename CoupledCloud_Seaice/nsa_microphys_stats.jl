@@ -128,7 +128,7 @@ begin
     θ₀ = 235e0;
     θ₁ = 110e0;
 
-    DB = let tmp = filter(𝐷-> (𝐷.cth ≤ 3.5f3) && !ismissing(𝐷.coupled), DBraw) #(0< 𝐷.δₕ ≤ 3.5f3)
+    DB = let tmp = filter(𝐷-> (𝐷.cth ≤ 3.0f3) && !ismissing(𝐷.coupled), DBraw) #(0< 𝐷.δₕ ≤ 3.5f3)
         # converting type Missing from :coupled to Bool:
 		disallowmissing!(tmp, :coupled, error=false)
 		
@@ -142,10 +142,10 @@ begin
 		#ii = findall((tmp.lwp .< 5) .&& (tmp.iwp .<5))
         #ii = findall(tmp.lwp .> 1000 .|| tmp.lwp .< 5)
         #tmp.lwp[ii] .= NaN32 #0.0
-		#ii = findall(tmp.iwp .> 1000 .|| tmp.iwp .< 5)
+		#ii = findall(tmp.iwp .> 1000 .|| tmp.iwp .< 5)≤ 1f3
         #tmp.iwp[ii] .= NaN32 #0.0
 			
-		filter!(d-> 5 ≤ d.lwp ≤ 7f2 || 5 ≤ d.iwp ≤ 1f3, tmp) # || 5<d.iwp<1f3, tmp)
+		filter!(d-> 5 < d.lwp || 5 < d.iwp, tmp) # || 5<d.iwp<1f3, tmp)
 		
 		tmp
     end;
@@ -731,10 +731,10 @@ strwinter = [@sprintf("%02d/%02d", jj-2000, (jj+1)-2000) for jj in jahren[1:end-
 # ╔═╡ 49654852-af74-468f-9ddd-cefa4f055907
 begin
 	var_meta = Dict(
-		:lwp=>(unit="g m⁻²", labe="LWP", lege=L"\rm{\overline{LWP}}", lim=(1,250), stats=:geometric),
-		:iwp=>(unit="g m⁻²", labe="IWP", lege=L"\rm{\overline{IWP}}", lim=(0.01, 130), stats=:geometric),
-		:der=>(unit="μm", labe="Droplet  "*L"r_{eff}", lege=L"\overline{r_{eff}}", lim=(7, 30), stats=:geometric),
-		:ier=>(unit="μm", labe="Ice  "*L"r_{eff}", lege=L"\overline{r_{eff}}", lim=(35,55), stats=:geometric),
+		:lwp=>(unit="g m⁻²", labe="LWP", lege=L"\rm{\overline{LWP}}", lim=(0.1,250), stats=:geometric),
+		:iwp=>(unit="g m⁻²", labe="IWP", lege=L"\rm{\overline{IWP}}", lim=(0.01, 80), stats=:geometric),
+		:der=>(unit="μm", labe="Droplet  "*L"r_{eff}", lege=L"\overline{r_{eff}}", lim=(5, 30), stats=:geometric),
+		:ier=>(unit="μm", labe="Ice  "*L"r_{eff}", lege=L"\overline{r_{eff}}", lim=(30,55), stats=:geometric),
 		:T2m=>(unit="K", labe=L"\rm{T_{2m}}", lege=L"\rm{\overline{T_{2m}}}", lim=(240,274), stats=:aritmetic),
 		:Γ=>(unit="K km⁻¹", labe=L"Γ_{\textrm{cloud}}", lege=L"\overline{Γ}_\textrm{cloud}", lim=(-8,12.0), stats=:aritmetic),
 		:δₕ=>(unit="m", labe="Cloud depth ", lege=L"\delta H_\textrm{cloud}", lim=(50, 1f4), stats=:aritmetic),
@@ -1000,12 +1000,12 @@ begin
 	title=siclimstr*" & "*String(paxva)*"-pressure")
 
 	# Plotting time series with smoothed data points:
-	@df mdf[:q50][paxva] scatter!(:winter .+[.05 -.05], [:S_de :S_co], marker=:x, ms=5, mc=farben, label=false)
+	#@df mdf[:q50][paxva] scatter!(:winter .+[.05 -.05], [:S_de :S_co], marker=:x, ms=5, mc=farben, label=false)
 	
 	# Plotting fitted trend lines:
 	@df mdf[:q50][paxva] plot!(:winter, [:lin_de :lin_co], ribbon=[:err_de :err_co], lw=2, la=0.9, fillalpha=0.2, lc=farben, fillcolor=farben, label=get_trend_str(ravstat, varva, :q50, paxva; vargof=:r2chi2).*"\n".*get_trend_str(ravstat, varva, :q50, paxva),
 	xtick=(:winter, strwinter), xrot=30, xlabel = "Wintertime [+2000 year]",
-	yscale=ifelse(any(varva ∈ (:δₕ, )), :log10, :identity), ylabel = var_meta[varva].labe*" [$(var_meta[varva].unit)]", ylim=yye_lims,
+	yscale=ifelse(any(varva ∈ (:δₕ, :clb)), :log10, :identity), ylabel = var_meta[varva].labe*" [$(var_meta[varva].unit)]", ylim=yye_lims,
 	#ylim=ifelse(varva!=:Γ, var_meta[varva].lim.*(1,1.0), (0, 10)), # for Γ_cloud (0, 10) #var_meta[varva].lim.*(1,1.0)
 	legend=(0.08, 0.92), bottom_margins=+2Plots.mm)
 	
@@ -1153,7 +1153,7 @@ end
 
 # ╔═╡ 6846cf1f-9a49-4731-8552-189b8c095833
 #@df filter(d->d.lwp<1f3 && d.iwp<1.5f3, DBraw) histogram(log10.([:lwp :iwp]), yscale=:log10); vline!([log10(5)])
-@df filter(d->d.lwp>0 && d.iwp>0, DB) scatter(:lwp, :iwp, m=:+, ms=1, xscale=:log10, yscale=:log10, minorgrid=true); vline!([5 0.8f3]); hline!([5 3f3])
+#@df filter(d->d.winter==2016, DB) scatter(:lwp, :iwp, m=:+, ms=1, xscale=:log10, yscale=:log10, minorgrid=true); vline!([5 0.8f3]); hline!([5 3f3]) # filter(d->d.lwp>0 && d.iwp>0, DB)
 
 # ╔═╡ e533eb73-dfaf-4928-9be6-72340edca990
 @df DataFrame((:co, :de).=>[rfits[c][:q50][paxva].resid for c in (:co, :de)]) density([:co, :de], bandwidth=1)
