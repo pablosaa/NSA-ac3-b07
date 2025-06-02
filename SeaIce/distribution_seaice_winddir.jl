@@ -15,9 +15,10 @@ include("aux_math_functions.jl");
 
 SEAICE = include(joinpath(homedir(), "LIM/repos/SEAICEtools.jl/src/SEAICEtools.jl"));
 
+const SATELLITE = "amsr2";  # "ssmis"; # (SSMIS is for 2011.11 to 2012.04)
 const PROD_PATH = "/projekt2/ac3data/B07-data/SeaIce";  # joinpath(homedir(), "LIM/data/B07/SeaIce");
 const RVNAV_PATH = joinpath(homedir(), "LIM/data/B07/arctic-mosaic");
-const LATLON_FILE = joinpath(PROD_PATH, "amsr2", "LongitudeLatitudeGrid-n3125-ChukchiBeaufort.h5");
+#const LATLON_FILE = joinpath(PROD_PATH, "amsr2", "LongitudeLatitudeGrid-n3125-NorthWestPassage.h5"); # "LongitudeLatitudeGrid-n3125-ChukchiBeaufort.h5");
 const DATCSV_PATH = "/projekt2/ac3data/B07-data/utqiagvik-nsa/";  #joinpath(homedir(), "LIM/scripts/NSA-ac3-b07/CoupledCloud_Seaice/data");
 const DATOUT_PATH = joinpath(homedir(), "LIM/scripts/NSA-ac3-b07/SeaIce/data"); ## old: CoupledCloud_Seaice/data");
 const R_lim = 50e3;   # radius around RV polarstern
@@ -34,19 +35,22 @@ PRODUCTS = (:SIC,) # (:DIV, :LF, :SIC)
 
 dist_wdir = Dict(data=>Dict() for data ∈ PRODUCTS)
 
+println(now())
 #yy = 2020
 #mm = 4
 #dd = 15
-
-datum = ((11,2013), (12,2013)) #, (1, 2023), (2, 2023),  (3,2023), (4,2023)) #(11,2021), 
-days = (1:31)
+winter_jahr = 2020:2024;
+#datum = [Date(yy, 11)+Month(m) for yy ∈ winter_jahr for m ∈ 0:5]
+datum = (Date(2025,3),) # ((1,2025), ) #(12,2022), (1, 2023), (2,2023)) #, (1, 2023), (2, 2023),  (3,2023), (4,2023)) #(11,2021), 
+days = (1:8)
 
 !isempty(ARGS) && foreach(ARGS) do argin
 	ex = Meta.parse(argin)
 	eval(ex)
 end
 
-for (mm, yy) ∈ datum #, (5,2020)]
+for wintertime ∈ datum #, (5,2020)]
+        mm, yy = month(wintertime), year(wintertime)
 #mm = 11; yy=2019;
 
 ## # reading 6 hour RV track coordinates to plot:
@@ -122,8 +126,16 @@ for data ∈ PRODUCTS
     end
     
     dat_coor = if data == :SIC
-        lr_filen = ARMtools.getFilePattern(PROD_PATH, "amsr2", yy, mm, dd, fileext=".h5")
+        lr_filen = ARMtools.getFilePattern(PROD_PATH, SATELLITE, yy, mm, dd, fileext=".h5")
         isnothing(lr_filen) && (@warn "No data for $(heute)"; continue)
+        # Getting the metadata with the version, resolution, and coordinates information:
+        LATLON_FILE = NCDataset(lr_filen) do nc
+            long_name = nc["ASI Ice Concentration"].attrib["long_name"] |> x->filter(!isspace, x)
+            metasic = split(long_name, ",") |> x->split.(x, ":") |> x->Dict(Symbol(first(V))=>last(V) for V ∈ x if length(V)>1)
+            ASI_res = parse(Float32, metasic[:res])*1f3 |> Int
+            joinpath(PROD_PATH, "amsr2", "LongitudeLatitudeGrid-n$(ASI_res)-$(metasic[:Region]).h5"); 
+        end
+        !isfile(LATLON_FILE) && @error("Coordinates File $(LATLON_FILE) cannot be found: at $(lr_filen)")
         SEAICE.read_LatLon_Bremen_product(LATLON_FILE)
     else
             
@@ -324,9 +336,17 @@ end # over variables
 output_fn = @sprintf("SIC/%04d/seaice_winddir_%04d%02d%02d.jld2", yy, yy, mm ,dd);
 
 ##println(output_tn)
-save_object(joinpath(DATOUT_PATH, output_fn), dist_wdir)
+TO_SAVE = map(x->isempty(dist_wdir[x]), PRODUCTS) |> all
+if TO_SAVE
+    @warn("Data on $(wintertime) $(dd) is empty. Skipping...")
+    continue
+else
+    save_object(joinpath(DATOUT_PATH, output_fn), dist_wdir)
+end
 
 end # over days
 end # over datum
+
+println(now())
 
 # end of script

@@ -22,17 +22,15 @@ using ATMOStools
 const CAMPAIGN = "utqiagvik-nsa" # "arctic-mosaic" #
 const DATA_PATH = "/projekt2/ac3data/B07-data" #joinpath(homedir(), "LIM/data/B07")
 const LPR_PATH = joinpath(DATA_PATH, "LP")
-const CLNET_PATH = joinpath(DATA_PATH, CAMPAIGN, "CloudNet","1.9.0", "output")
+const CLNET_PATH = joinpath(DATA_PATH, CAMPAIGN, "CloudNet/output/V1_68_1")   # "1.9.0"
 const CLNET_PRODUCT = "CEIL10m" # "TROPOS/processed/categorize"
 const RS_PATH = joinpath("/projekt2/remsens/data_new/site-campaign", CAMPAIGN)
-const OUT_CSV = joinpath(DATA_PATH, CAMPAIGN, "csv_nsa") 
+const OUT_CSV = joinpath(DATA_PATH, CAMPAIGN, "csv_nsa") # "/tmp/csv_nsa" #
 
 include("tmp_auxfiles.jl");
 
 # Optional flags:
-const ADDAOI = true;
-const ADDT2m = false;
-const ADDPsu = false;
+const ADDAOI = false;
 
 # Reading AO index if flag set to TRUE:
 if ADDAOI
@@ -43,7 +41,7 @@ if ADDAOI
 end
 
 
-winter_jahr = 2011:2011;
+winter_jahr = 2011:2024;
 #( (winter_jahr,11), (winter_jahr,12), (,1), (2019,2), (2019,3), (2019,4))
 days = (1:31) #,21,22,23,24,25,26,27,28,29,30) #21  #18 #28 #6
 
@@ -53,7 +51,7 @@ days = (1:31) #,21,22,23,24,25,26,27,28,29,30) #21  #18 #28 #6
 end
 
 datum = [Date(yy, 11)+Month(m) for yy ∈ winter_jahr for m ∈ 0:5]
-#datum = [Date(2024,4)] #, Date(2024,3), Date(2024,4)]
+#datum = [Date(2025,3)] #, Date(2024,3), Date(2024,4)]
 
 for heute in datum
     yy, mm = year(heute), month(heute)
@@ -80,7 +78,7 @@ for heute in datum
         end;
 
         IWC = let nfile=ARMtools.getFilePattern(CLNET_PATH, CLNET_PRODUCT, yy, mm, dd, fileext="iwc.nc");
-            CloudnetTools.readIWCFile(nfile)
+            CloudnetTools.readIWCFile(nfile; inc_rain=false, apply_flag=[0,1,3,6])
         end;
 
 
@@ -91,7 +89,8 @@ for heute in datum
         # Reading ARM microwave radiometer file:
         mwr = let nfile=ARMtools.getFilePattern(RS_PATH, "MWR/RET", yy, mm, dd)
             tmp = if !isnothing(nfile)
-                ARMtools.getMWRData(nfile, onlyvars=["surface_temp"],addvars=["surface_pres"]) 
+                # MWR/RET surface temperature in K, surface pressure kPa, orig_pwv cm (original PWV)
+                ARMtools.getMWRData(nfile, onlyvars=["surface_temp"],addvars=["surface_pres", "orig_pwv"]) 
             else
                 # if MWR/RET is not available, trying with RADFLUX data:
                 #nfile=ARMtools.getFilePattern(RS_PATH, "MWR/LOS", yy, mm, dd)
@@ -99,30 +98,82 @@ for heute in datum
                 tmp = !isnothing(nfile) && ARMtools.read_radflux(nfile,Date(yy,mm,dd), onlyvars=["air_temperature"],addvars=["pressure"])
                 Dict(:time=>tmp[:time], :SFT=>tmp[:T_air], :SURFACE_PRES=>tmp[:PRESSURE])
             end
-            #sonde_times"]) # 20210123 on sonde_launch_status
+            # MWR/RET is about 2.5 data points per minute, thus
             # interpolating to radiosonde time resolution:
             if !isnothing(nfile)
                 Dict(:time=>rs[:time],
-                 :SFT=>CloudnetTools.Interpolate2Cloudnet(rs, tmp[:time], tmp[:SFT]),
-                 :SFPa=>CloudnetTools.Interpolate2Cloudnet(rs, tmp[:time], tmp[:SURFACE_PRES])
-                )
+                     #:IWV=>CloudnetTools.Interpolate2Cloudnet(rs, tmp[:time], tmp[:ORIG_PWV]),
+                     :SFT=>CloudnetTools.Interpolate2Cloudnet(rs, tmp[:time], tmp[:SFT]),
+                     :SFPa=>CloudnetTools.Interpolate2Cloudnet(rs, tmp[:time], tmp[:SURFACE_PRES])
+                    )
             else
                 @warn("No MWR file found $(nfile)")
                 nfile
             end
         end;
 
-        # Reading Infrared surface temperatures from ARM
-        tir_filen = try
-            ARMtools.getFilePattern(RS_PATH, "GNDIRT", yy, mm, dd)
+        #=
+        Reading RADLUX LW up and down-welling radiation to estimate surface temperatures from ARM.
+        In case RADFLUX data is not available for a given Date, then GND IRT data is used as proxy,
+        and when neither RADFLUX for GNDIRT data are available then 2m T from MWR is used as alternative.
+        =#
+        tir = try
+        #    tirpath = joinpath(RS_PATH, "RADFLUX")
+        #    radfile = ARMtools.getFilePattern(RS_PATH, "RADFLUX", yy, mm, dd)
+        #    tirfile = isnothing(radfile) && ARMtools.getFilePattern(RS_PATH, "GNDIRT", yy, mm, dd)
+        #    if !isnothing(radfile)
+        #        # RAD FLUX is 1 min resolution:
+        #        radflux = ARMtools.read_radflux(tirpath, Date(yy,mm,dd), addvars=["pressure"])
+        #        radflux[:IRT] = ATMOStools.T_surf.(radflux[:dw_lw], radflux[:up_lw])  # [K]
+        #        radflux[:SFPa] = radflux[:PRESSURE]
+        #        radflux
+         tirfile = ARMtools.getFilePattern(RS_PATH, "GNDIRT", yy, mm, dd)
+         if !isnothing(tirfile)
+                # GND IRT is 1 min resolution (but sometimes a day has less than 1440 min).
+                tirdat = let tmp = ARMtools.getGNDIRTdata(tirfile)
+                    
+                    if length(tmp[:time]) ≠ length(rs[:time])
+                        tmp = Dict(:time => rs[:time],
+                             Dict(k=>CloudnetTools.Interpolate2Cloudnet(rs, tmp[:time], V) for (k,V) ∈ tmp if k≠:time && isa(V, Vector))...)
+                       
+                    end
+                    tmp[:SFPa] = mwr[:SFPa]
+                    tmp
+                end     
+                tirdat
+            else
+                @warn "On $dd.$mm.$yy using MWR data as surface T proxy!"
+                Dict(:time=>mwr[:time], :IRT=> mwr[:SFT], :SFPa=>mwr[:SFPa])
+            end
         catch e
+            @error("Didn't work with TIR") #i
             println(e)
             nothing
         end
-        tir = !isnothing(tir_filen) ? ARMtools.getGNDIRTdata(tir_filen) : Dict(:time=>mwr[:time], :IRT=> mwr[:SFT])
+       
+        # Calculating Tskin by means of LW down-welling and up-welling radiation:
+        radflux = let radfile=ARMtools.getFilePattern(RS_PATH, "RADFLUX", yy, mm, dd)
+            if !isnothing(radfile)
+                # RAD FLUX is 1 min resolution:
+                radpath = joinpath(RS_PATH, "RADFLUX")
+                radflux = ARMtools.read_radflux(radpath, Date(yy,mm,dd), addvars=["pressure"])
+                radflux[:IRT] = ATMOStools.T_surf.(radflux[:dw_lw], radflux[:up_lw])  # [K]
+                radflux[:SFPa] = radflux[:PRESSURE]
+                radflux
+            else
+                radflux = Dict(:time=>rs[:time], :IRT=>fill(NaN32, length(rs[:time])), :SFPa=>fill(NaN32, length(rs[:time])))
+            end
+            radflux
+        end
+        ## tir = !isnothing(tir_filen) ? ARMtools.getGNDIRTdata(tir_filen) : Dict(:time=>mwr[:time], :IRT=> mwr[:SFT])
 
-        # If TIR is availabe, then add it to radiosonde data as surface level:
-        typeof(tir)<:Dict && ARMtools.attach_Tₛ!(rs, tir[:IRT].-273.15, tir[:time]);
+        # *** If TIR is availabe, then add it to radiosonde data as surface level: tir[:IRT] [K]
+        # TODO: check what the differences are by using TIR, RADFLUX Tsurf, or T2m ***
+        if all(isnan.(radflux[:IRT]))
+            ARMtools.attach_Tₛ!(rs, tir[:IRT] .- 273.15, tir[:time]);
+        else
+            ARMtools.attach_Tₛ!(rs, radflux[:IRT] .- 273.15, radflux[:time]);
+        end
         rs[:height][end] < 45 && (rs[:height] .*= 1f3)  # converting km to m 
 
         # ****************************************************************
@@ -185,11 +236,16 @@ for heute in datum
             𝐼
         end;
         
-        # 8.3 Measured LWP from the radiometer direcly: (NOT YET IMPLEMENTED!!!)
-        mwrLWP = let X=fill(NaN32, size(LWP))
-            X[idxtclnt] = replace(LWC[:LWP], missing=>NaN32)
-            vec(X)
+        # 8.3 Measured LWP and IWV from the radiometer direcly:
+        mwrLWP = let X=fill(NaN32, size(CBH,1))
+            X[idxtclnt] = replace(clnet[:LWP], missing=>NaN32)
+            vec(X).*1f3  # converting categorize LWP [kg m⁻2] to [g m⁻2]
         end
+        #mwrIWV = let X=fill(NaN32, size(CBH,1))
+        #    X = replace(mwr[:IWV], missing=>NaN32)
+        #    vec(X).*10.0  # Temporal solution to convert cm->kg cm⁻2, future will be used  value from categorize
+        #end
+
 
         # 9. Calculating layer weighted average effective radius for droplets and ice particles:
         Reff = let fdrop=ARMtools.getFilePattern(CLNET_PATH, CLNET_PRODUCT, yy, mm, dd, fileext="der.nc")
@@ -249,6 +305,7 @@ for heute in datum
 
         # 15. storing results:
         wdir_fn=joinpath(OUT_CSV, @sprintf("%04d/winddir_%04d%02d%02d_I.csv", yy, yy, mm, dd))
+        # println(names(tir)); println(names(radflux)); println(names(mwr))
         CSV.write(wdir_fn, DataFrame(date=rs[:time],
                                      wvtdir=wdir,
                                      wvtspd=wspd,
@@ -258,9 +315,10 @@ for heute in datum
                                      pblh=PBLH,
                                      lwp=vec(LWP[idx]),
                                      iwp=vec(IWP[idx]),
-                                     Tskin=rs[:T][1,:],
+                                     Tskin=tir[:IRT], #rs[:T][1,:],
+                                     Tsurf=radflux[:IRT],
                                      T2m =mwr[:SFT],
-                                     Pa = mwr[:SFPa],
+                                     Pa = tir[:SFPa],
                                      cldBT=vec(CBT[idx]),
                                      cldTT=vec(CTT[idx]),
                                      cldLT=vec(CLT[idx]),
@@ -273,7 +331,8 @@ for heute in datum
                                      decoH=vec(decop_hgt[idx]),
                                      decoT=vec(topdecop_hgt[idx]),
                                      coupled=ϑ_flag,
-                                     aoi=aoi.aoi) #mwrlwp=mwrLWP)
+                                     mwrlwp=mwrLWP)
+                                     #mwriwv=mwrIWV) #aoi=aoi.aoi) #
                  )
 
     end  # over days

@@ -30,7 +30,7 @@ const LFSIC_PATH = joinpath(BASE_PATH, "SeaIce/data")
 const MIPHY_PATH = joinpath(DATA_PATH, "csv_nsa")
 
 # defining the wintertime to process e.g. for year yy:Nov, Dec to yy+1:Jan, Feb, Mar, Apr.
-years = (2013,) # 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023)
+years = (2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024)
 
 
 for jahr ∈ years
