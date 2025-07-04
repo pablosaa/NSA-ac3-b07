@@ -1,5 +1,5 @@
 ### A Pluto.jl notebook ###
-# v0.20.4
+# v0.20.6
 
 using Markdown
 using InteractiveUtils
@@ -7,7 +7,7 @@ using InteractiveUtils
 # This Pluto notebook uses @bind for interactivity. When running this notebook outside of Pluto, the following 'mock version' of @bind gives bound variables a default value (instead of an error).
 macro bind(def, element)
     #! format: off
-    quote
+    return quote
         local iv = try Base.loaded_modules[Base.PkgId(Base.UUID("6e696c72-6542-2067-7265-42206c756150"), "AbstractPlutoDingetjes")].Bonds.initial_value catch; b -> missing; end
         local el = $(esc(element))
         global $(esc(def)) = Core.applicable(Base.get, el) ? Base.get(el) : iv(el)
@@ -57,11 +57,7 @@ md"""
 # ╔═╡ 48c90554-bc23-4e44-a050-4bce892614a2
 # Defining data path
 begin
-    const BASE_PATH = joinpath(homedir(), "LIM/data/B07/utqiagvik-nsa/csv_nsa")
-    #/scripts/NSA-ac3-b07/CoupledCloud_Seaice")
-    #"/projekt2/ac3data/B07-data/utqiagvik-nsa/csv_nsa/" #	
-    const LFSIC_PATH = joinpath(BASE_PATH, "data/SIC")
-    const MIPHY_PATH = joinpath(BASE_PATH, "data/csv_mosaic")
+    const BASE_PATH = joinpath(pwd(), "buffer_data")
 end;
 
 # ╔═╡ d734cb56-6da3-4d2f-8bca-a804bba0ba35
@@ -81,7 +77,7 @@ md"""
 """
 
 # ╔═╡ d56e6ef8-24cc-4afc-a155-5d411c3b9422
-DBraw = CSV.read(joinpath(BASE_PATH, "yearly", "all_nsa_microphys_db_$(wintertime).csv"), header=1, skipto=2, DataFrame);
+DBraw = CSV.read(joinpath(BASE_PATH, "csv_nsa/yearly", "all_nsa_microphys_db_$(wintertime).csv"), header=1, skipto=2, DataFrame);
 
 # ╔═╡ e274212a-ef60-4258-930e-32d6d27f1e36
 begin
@@ -89,12 +85,12 @@ begin
     
     DBraw[!, :ΔZ] = let tmp=fill(NaN32, length(DBraw[!, :Pa]))
         paₘ = filter(>(0), DBraw.Pa) |> mean
-		taₘ = filter(>(0), DBraw.T2m) |> mean
+		taₘ = filter(>(0), DBraw.Tskin) |> mean
         R =  287.05  # [J kg⁻¹ K⁻¹]  Specific gas constant
         g₀ = 9.83  #[m s⁻²]
         ΔZ(T, P, Pₘ) = R/g₀*T*log(Pₘ/P)  # [m]
 		
-		T₀ = copy(DBraw.T2m)
+		T₀ = copy(DBraw.Tskin)
 		T₀[isnan.(T₀)] .= taₘ    #@. (DBraw.T2m + (DBraw.Tskin+273.15))/2
         tmp = @. ΔZ(T₀, DBraw.Pa, 101.32)
         tmp
@@ -145,8 +141,9 @@ begin
 		#ii = findall(tmp.iwp .> 1000 .|| tmp.iwp .< 5)≤ 1f3
         #tmp.iwp[ii] .= NaN32 #0.0
 			
-		filter!(d-> 5 < d.lwp || 5 < d.iwp, tmp) # || 5<d.iwp<1f3, tmp)
-		
+		filter!(d-> d.lwp > 5 && d.iwp > 5, tmp) # || 5<d.iwp<1f3, tmp)
+		filter!(d-> d.Tskin ≤ 273.9 && d.lwp < 8f2, tmp)
+		filter!(d-> !isnan(d.μSIC), tmp)
 		tmp
     end;
 	# Computing Optical thickness τc:
@@ -154,9 +151,10 @@ begin
 	DB[:, :τi] = @. 3/2*DB.iwp/DB.ier/0.917
 	
 	# Categorizing SIC into fixed width bins:
-    SIC_bin = (0:10:100)
+	# 0.0 - 75.0, 0.4 75.0 - 94.0, 0.6 94.0 - 98.0, 0.8: 98.0 - 99.0, 1.0: 99.0 - 100.0
+    SIC_bin = (0, 30, 60, 80, 90, 95, 100) #(0.0, 43.941566, 91.19343, 98.2683, 99.8023, 100.0) #(0, 75, 94, 98, 99, 100) #(0:10:100) 
 
-    DB[!, :sicₓ] = let tmp=fill(NaN, length(DB[!, :μSIC]))
+    DB[!, :sicₓ] = let tmp=fill(0f0, length(DB[!, :μSIC]))
         foreach(zip(SIC_bin[1:end-1], SIC_bin[2:end])) do (xb, xt)
             ii = findall((DB.μSIC .> xb) .&& (DB.μSIC .≤ xt))
             tmp[ii] .= mean([xb, xt])
@@ -202,13 +200,14 @@ function add_winter!(df::DataFrame)
 end
 
 # ╔═╡ ae59d379-b47d-41fc-8958-4e9e1941b528
-filter(D-> D.wvtdir≥θ₀ || D.wvtdir≤θ₁, DBraw) |> D->length(D.date)
+# Percentage of RawData with WVT direction comming from the Land sector:
+filter(D-> D.wvtdir>θ₁ && D.wvtdir<θ₀ , DBraw) |> D->length(D.date)/length(DBraw.date) # && D.cth≤3f9  && D.mwrlwp>0
 
 # ╔═╡ d1b9d2b9-6b08-4d81-8042-26bddf8f5e54
 filter(D-> (D.cth - D.cbh)≤(3f3) , DB).date |> length #&& && D.coupled==(true) && D.lf₀==(false) 
 
 # ╔═╡ 9fe20fcc-8de8-4f4c-aff2-214797c40ba0
-Ndat = Dict(:co=>reduce(+, DB.coupled), :de=>reduce(+, .!DB.coupled)); pretty_table(HTML, Ndat)
+Ndat = Dict(:co=>reduce(+, DB.coupled)/length(DB.date), :de=>reduce(+, .!DB.coupled)/length(DB.date), :H=>reduce(+, DB.paₓ .<0)/length(DB.date), :L=>reduce(+, DB.paₓ .>0)/length(DB.date)); pretty_table(HTML, Ndat)
 
 # ╔═╡ 89809ea8-94a4-4158-8f23-b4a2322532b2
 md"""
@@ -364,6 +363,28 @@ begin
 	SAVEFIG ? savefig(sktfig, "/home/psgarfias/quicklooks/nsa_yearly/$(wintertime)_AOI$(zflag)_SKT.png") : sktfig
 end
 
+# ╔═╡ 1f6657ba-9910-48fc-84a3-399a28d84ef5
+begin
+	idxco = findall(DB[!, :coupled])
+	idxde = findall(.!DB[!, :coupled])
+	myedges = range(1, stop=1000.0, length=50) |> collect
+	Nlf02co = filter(c->(c.lf₀==(true) && c.coupled==(true)), DB).lwp |> length
+	Nlf02de = filter(c->c.lf₀==(true) && c.coupled==(false), DB).lwp |> length
+	#marginal
+	lwphistco = StatsBase.fit(Histogram, DB[idxco, :lwp], myedges)
+	lwphistde = StatsBase.fit(Histogram, DB[idxde, :lwp], myedges)
+	iwphistco = StatsBase.fit(Histogram, DB[idxco, :iwp], myedges)
+	iwphistde = StatsBase.fit(Histogram, DB[idxde, :iwp], myedges)
+		#DB[idxde, :lwp], colorbar_scale=:log10, colorbar=true, colorbar_position=:left)
+	#vline!([-5.5])http://localhost:1234/?secret=QNUDmOcxyerror=:σχᵢ, 
+	scatter(lwphistco.weights, lwphistde.weights, ms=7, zcolor=(myedges), clim=(1, 1000), xscale=:log10, yscale=:log10, xlim=(.51,1f6),ylim=(.51,1f6), label="Liquid", xlabel="# Coupled cases", ylabel="# Decoupled cases", color=NNcol)
+	scatter!(iwphistco.weights, iwphistde.weights, zcolor=(myedges), clim=(1, 800), xscale=:log10, yscale=:log10, xlim=(.51,1f6),ylim=(.51,1f6), ms=6, m=:star6, label="Ice",color=NNcol, colorbar_titlefontsize=13, colorbar_title="\nWater path [g m⁻²]", colorbar_scale=:log10)
+	plot!([1, 1f6],[1, 1f6], ls=:dash, lc=:black, lw=2, label="1:1")
+	plot!([10 1f2; 1f6 1f6],[1 1; 1f5 1f4], lw=2, ls=:dashdot, lc=[:tomato3 :tomato], label=["10:1" "100:1"], frame_style=:box, tickdir=:out, minorticks=true, tickfontsize=13, guidefontsize=14, legendfontsize=13, legend=:topleft, margin=8Plots.mm, size=(600,500), dpi=600)
+	
+	#plot(histco); plot!(histde)
+end
+
 # ╔═╡ 3473d761-f57f-4d3f-beba-a8a516041da5
 begin
 	reff_plt = @df filter(c->1<c.der<150, DB) density(:der, group=(:lf₀, :coupled), label=hinweistext, lc=farben, linealpha=[.7 .7 1 1], l=[:dash :dash :solid :solid], xlim=(0, 60), xlabel=L"\mathrm{Liquid}~~\overline{r}_{eff}~ /~~\mathrm{\mu~m}", ylabel="PDF @ Z $zflag", trim=false, lw=[2 2 4 4], frame_style=:box, tickdir=:out,  minorticks=true, tickfontsize=13, guidefontsize=15, legendfontsize=12, size=(500,500), legend=:topright)
@@ -390,16 +411,13 @@ begin
 	## lf_bin = range(δlf, step=δlf, stop=.5) |> collect
 	## Nbins = length(lf_bin)
 	δsic = 10 #mean(diff(sic_bin))
-    sic_bin = range(δsic, step=δsic, stop=100) |> collect
+    sic_bin = DB.sicₓ |> unique |> sort  #range(δsic, step=δsic, stop=100) |> collect
     Nbins = length(sic_bin)
 	lwp_bin = fill(NaN32, Nbins,2)
 	iwp_bin = fill(NaN32, Nbins,2)
 	
 	#sic_edg = sic_bin .- diff(sic_bin)[1]; push!(sic_edg, 101)
 end;
-
-# ╔═╡ bf4bc3ca-2137-45bc-a8fa-5e43594c366c
-range(0, step=10, stop=100) |> collect
 
 # ╔═╡ ac217227-a672-4f9c-80ff-277c57e473f9
 """
@@ -481,6 +499,12 @@ filter(V-> V.coupled==(true), DB) |> F->length(findall(<(10), F.decoH))/length(F
 # ╔═╡ c5b02891-e561-4667-a07b-a29f52bb66c4
 fσₑᵣ(x) = sqrt(mean(x.^2)/length(x))
 
+# ╔═╡ 8846a5e6-ab5a-4156-bc59-b19a2033577f
+let edges=[SIC_bin[1].*(1,1)]
+	[push!(edges, (SIC_bin[i-1], SIC_bin[i])) for i in 1:Nbins if i>1]
+		edges
+	end
+
 # ╔═╡ 264627a8-4975-4b75-b4de-136d9861aa0e
 begin
     # CLOUD Variables to consider
@@ -495,18 +519,18 @@ begin
 			:iwp=>(lim=(0, 4000), stats=:median),
 			:der=>(lim=(0, 150), stats=:median),
 			:ier=>(lim=(0, 150), stats=:median),
-			:δₕ=>(lim=(0,3.5f3), stats=:aritmetic),
-			:Γ=>(lim=(-40,40), stats=:aritmetic),
-			:χᵢ=>(lim=(-0.1,1.1), stats=:truncate),
-			:cldTT=>(lim=(0, 300), stats=:aritmetic),
-			:clb=>(lim=(0, 3.5f3), stats=:aritmetic),
-			:τc=>(lim=(0, 500), stats=:median),
-			:τi=>(lim=(0, 500), stats=:median)
+			:δₕ=>(lim=(0,3.5f3), stats=:median),
+			:Γ=>(lim=(-40,40), stats=:median),
+			#:χᵢ=>(lim=(-0.1,1.1), stats=:truncate),
+			:cldTT=>(lim=(0, 300), stats=:median),
+			:clb=>(lim=(0, 3.5f3), stats=:median),
+			#:τc=>(lim=(0, 500), stats=:median),
+			#:τi=>(lim=(0, 500), stats=:median)
 	)
 
 	VARIN = keys(var_lim)
 	# auxiliary function to select variable within acceptable limits:
-	within(V; lims=(0, Inf)) = ifelse(lims[1]<0, lims[1] ≤ V ≤ lims[2], lims[1] < V ≤ lims[2])
+	within(V; lims=(0, Inf)) = ifelse(lims[1]<0, lims[1] ≤ V ≤ lims[2], lims[1] ≤ V < lims[2])
 
 	dat = let tmp = Dict()
 		# considering flag of H/L pressure?
@@ -522,7 +546,7 @@ begin
 		tmp[:de].coupled = fill(false, xNbins)
 		tmp[:co].coupled = fill(true, xNbins)
 		
-		tmp[:de][!, :sic_bin] = [sic_bin..., sic_bin...].-3
+		tmp[:de][!, :sic_bin] = [sic_bin..., sic_bin...]
 		tmp[:co][!, :sic_bin] = [sic_bin..., sic_bin...]
 		
 		tmp[:de][!, :sic_var] = fill(NaN32, xNbins)
@@ -536,15 +560,13 @@ begin
 			
 		for y in VARIN
 			
-			for i in 1:Nbins
+			for i in 2:Nbins
 
 				idx = i + (z==1 ? Nbins : 0)
 				isym = Symbol(:μ, y)
 				ssym = Symbol(:σ, y)
 				# ---
-				#### sic_edg0 = sic_bin[i] - 0.75δsic
-				#### sic_edg1 = sic_bin[i] + 0.75δsic
-				sic_edgs = (max(4, sic_bin[i] - δsic), sic_bin[i])   # -/+ 0.75
+				sic_edgs = (SIC_bin[i-1], SIC_bin[i])
 				
 				# filling with variables (decoupled):
 				
@@ -565,6 +587,12 @@ begin
 	end
 end;
 
+# ╔═╡ bb176db2-fd18-4a59-9021-d2396a030b6d
+sic_bin, SIC_bin
+
+# ╔═╡ fa9e471b-3f58-459a-b99c-48cb1087e795
+unique(DB.sicₓ)
+
 # ╔═╡ 75609282-c67c-4794-a68b-94d32c004783
 md"""
 ### Fitting data as function of SIC
@@ -576,7 +604,7 @@ where ``f_s \in \{\mathrm{lwp},~ \mathrm{iwp},~ r_{eff} \}`` and ``sic \in \{0, 
 # ╔═╡ 46c4e7cd-7d8a-49b7-abdd-1347692dcfd8
 begin
 	fᵢ(X, β) = @. β[1]*X^β[2]
-    fₛ(X, β; X0=100) = @. β[1] + β[2]*exp((X/X0)^2) #exp((X/X0)^2) #- β[2]*exp((X/X0)^2 - 1) # 
+    fₛ(X, β; X0=100) = @. β[1] + β[2]*exp((X/X0)^2) #+ β[2]*exp((X/X0)^2) #exp((X/X0)^2) #- β[2]*exp((X/X0)^2 - 1) # 
     fᵧ(X, β; X0=100) = @. β[1] - β[2]*exp((X/X0)^2 -1) #(X/X0)^β[3] #
 end
 
@@ -619,10 +647,13 @@ rfit, R², Chi², Δβ = let ice = :μ,  ## :μLF,
 				Xin = Y.sic_bin[ii]			
 				#𝑆ₑᵣᵣ = @. 1/Y[ii, err]^2 #@. Y[ii, err]/Yin/sqrt(Y[ii, NNice] .-1)
 				𝑛 = length(ii)
-				ωᵢ = let err_sig = @. ifelse(Y[ii, err]>0, Y[ii, err], Y[ii, var]/2) #inv(Y[ii, err]^2)
-					err_sig = @. inv(err_sig^2)
+				ωᵢ, σ² = let
+					Y_err = eltype(Y[ii, err]) <: Tuple ? (last.(Y[ii, err]) .- first.(Y[ii,err]))  : Y[ii, err]
+					Y_err = @. ifelse(Y_err > 0, Y_err, Y[ii, var]/2)
+					σ² = @. Y_err^2
+					err_sig = @. inv(σ²)
 					err_tot = mean(err_sig)
-					AnalyticWeights(err_sig/err_tot)
+					AnalyticWeights(err_sig/err_tot), σ²
 				end
 				#abs(1 - (Y[ii, err]/Yin)^2))  #𝑛*𝑆ₑᵣᵣ/sum(𝑆ₑᵣᵣ) #sqrt(𝑆ₑᵣᵣ/𝑛) #
             	tmp[i][Δz][var], r2[i][Δz][var], chi2[i][Δz][var] = let 𝑓 = fₛ #var==:μΓ ? fᵧ : fₛ
@@ -631,18 +662,18 @@ rfit, R², Chi², Δβ = let ice = :μ,  ## :μLF,
 					Yf = 𝑓(Xin, Fx.param)
 					n = length(Yf)
 					ϵ² = ωᵢ.*(Yin .- Yf).^2 #Fx.resid.^2
-					σ² = Y[ii, err].^2
+					#σ² = Y[ii, err].^2
 					p = dof(Fx)
 					ŷ = mean(Yin)
 					Chi_sq = sum(ϵ²./σ²)/p
 					VARᵣₑₛ = sum(ωᵢ.*(Yin .- Yf).^2) #/p
 					VARₜₒₜ = sum(ωᵢ.*(Yin .- ŷ).^2) #/(n-1)
-					r_sq = cor(Yin, Xin)^2 #1 - VARᵣₑₛ/VARₜₒₜ # cor(Yin, Yf)^2 #
+					r_sq = cor(Yin, Yf)^2 #cor(Yin, Xin)^2 #1 - VARᵣₑₛ/VARₜₒₜ # 
 					Fx, r_sq, Chi_sq
 				end
             	 
 				try
-                	con[i][Δz][var] = confidence_interval(tmp[i][Δz][var], 0.05) |> X->[[X[1][1], X[2][1]], [X[1][2], X[2][2]]]
+                	con[i][Δz][var] = confint(tmp[i][Δz][var]) |> X->[[X[1][1], X[2][1]], [X[1][2], X[2][2]]]
 				catch e
 					println(e)
 					println(var, ": ", tmp[i][Δz][var].param, " ", length(ii))
@@ -652,9 +683,6 @@ rfit, R², Chi², Δβ = let ice = :μ,  ## :μLF,
     end  # end over co_status
 	tmp, r2, chi2, con
 end
-
-# ╔═╡ c0be60c9-6bd7-42c0-ab89-2a888873a024
-Δβ[:de][:H][:μclb] #|> p-> plot(sic_xin, [fₛ(sic_xin, p[1]) fₛ(sic_xin, p[2])])
 
 # ╔═╡ f4f1cf08-4843-46ee-9da2-529b40321c94
 let r2=Dict(:coupled=>[], :Z=>[])
@@ -691,37 +719,8 @@ begin
 	plot(tmpplt..., layout=grid(6,1), size=(500,600), dpi=600)
 end
 
-# ╔═╡ ecbebaf3-95b9-44e4-bd33-84d278ed1c06
-let mdf=filter(d->d.coupled==(true), dat[(Δz=1,)])
-	@df mdf scatter(:sic_bin, :μΓ, yerror=:σΓ, xflip=true) #Γ δₕ
-	wk = @. inv(mdf.σΓ^2)
-	
-	fx(x,β) = @. β[1]+β[2]*exp((x/100)^2) #exp((x/100)^β[3]) # β[2]*(x/100)^β[3] #β[1]-β[2]exp((x/100)^2-1 ) #*log((1.01-x/100)) # β[2] *(1-x/100)+β[3]))
-	fofo = curve_fit(fx, mdf.sic_bin, mdf.μΓ, wk, [100, 10.]) #, .100])
-	r2 = cor(mdf.μΓ, fx(mdf.sic_bin, fofo.param))^2
-	pp = fofo.param
-	println(pp)
-	x = mdf.sic_bin
-	println([ones(length(x)) exp.((x/100))]*fofo.param[1:2])
-	fy = fx(x, fofo.param)
-	# predict with intervals:
-	cf = coef(fofo)
-	ci = confidence_interval(fofo, 0.05)    # 5% significance level
-	println(ci)
-	#tl, bl = fx(x, [ci[1][1], ci[2][2]]), fx(x, [ci[2][1], ci[1][2]]) #ci[1][1] .+ ci[2][2]*x,   ci[1][2] .+ ci[2][1]*x
-	#σp, σm = maximum([tl bl], dims=2) .- 2fy,  2fy .- minimum([tl bl], dims=2)
-	ypre = predict_curve_fit(exp.((x/100).^2 ), fofo, Y=mdf.μΓ)
-	#println([σm σp])
-	plot!(x,ypre.prediction, ribbon=ypre.sig_ci, fillalpha=0.3, label="curve_fit")
-	plot!(x, fy, label="$(r2)", legend=:bottomright) #; hline!([cf[1]],label="wet")
-end
-
-# ╔═╡ 22002a9b-e812-4148-846c-2debbe47b9f3
-rfit[:co][:H][:μlwp].param, rfit[:de][:H][:μlwp].param
-
-# ╔═╡ 7d062d2d-fec4-459a-840d-8b678f624c6c
-#savefig(cc, "/home/psgarfias/Downloads/quicklooks/nsa/$(wintertime)_HL_MicPhys_SIC.png")
-#savefig(cc, "/home/psgarfias/Downloads/quicklooks/nsa/$(wintertime)_HL_MacPhys_SIC.png")
+# ╔═╡ 628ffc15-49dd-48d9-ac13-3ae2f700dee8
+@df filter(d->d.lwp>(0) && d.iwp>(0), DB) scatter(:lwp, :iwp, ms=1, m=:+, xscale=:log10, yscale=:log10)
 
 # ╔═╡ 6913d517-e07c-4962-9c6b-d090b1bb8faa
 # Creating the string for winter label like 2023/24 for the wintertime 2023 to 2024:
@@ -731,18 +730,18 @@ strwinter = [@sprintf("%02d/%02d", jj-2000, (jj+1)-2000) for jj in jahren[1:end-
 # ╔═╡ 49654852-af74-468f-9ddd-cefa4f055907
 begin
 	var_meta = Dict(
-		:lwp=>(unit="g m⁻²", labe="LWP", lege=L"\rm{\overline{LWP}}", lim=(0.1,250), stats=:geometric),
-		:iwp=>(unit="g m⁻²", labe="IWP", lege=L"\rm{\overline{IWP}}", lim=(0.01, 80), stats=:geometric),
+		:lwp=>(unit="g m⁻²", labe="LWP", lege=L"\rm{\overline{LWP}}", lim=(1,150), stats=:geometric),
+		:iwp=>(unit="g m⁻²", labe="IWP", lege=L"\rm{\overline{IWP}}", lim=(0.1, 80), stats=:geometric),
 		:der=>(unit="μm", labe="Droplet  "*L"r_{eff}", lege=L"\overline{r_{eff}}", lim=(5, 30), stats=:geometric),
-		:ier=>(unit="μm", labe="Ice  "*L"r_{eff}", lege=L"\overline{r_{eff}}", lim=(30,55), stats=:geometric),
+		:ier=>(unit="μm", labe="Ice  "*L"r_{eff}", lege=L"\overline{r_{eff}}", lim=(35,55), stats=:geometric),
 		:T2m=>(unit="K", labe=L"\rm{T_{2m}}", lege=L"\rm{\overline{T_{2m}}}", lim=(240,274), stats=:aritmetic),
-		:Γ=>(unit="K km⁻¹", labe=L"Γ_{\textrm{cloud}}", lege=L"\overline{Γ}_\textrm{cloud}", lim=(-8,12.0), stats=:aritmetic),
-		:δₕ=>(unit="m", labe="Cloud depth ", lege=L"\delta H_\textrm{cloud}", lim=(50, 1f4), stats=:aritmetic),
+		:Γ=>(unit="K km⁻¹", labe=L"Γ_{\textrm{cloud}}", lege=L"\overline{Γ}_\textrm{cloud}", lim=(-1,12), stats=:aritmetic), #-7
+		:δₕ=>(unit="m", labe="Cloud depth ", lege=L"\delta H_\textrm{cloud}", lim=(100, 5.9f3), stats=:aritmetic),
 		:τc=>(unit="·", labe="Liquid "*L"\tau", lege=L"\overline{\tau}_\rm{cloud}", lim=(0.0,20), stats=:geometric),
 		:τi=>(unit="·", labe="Ice "*L"\tau", lege=L"\overline{\tau}_\rm{cloud}", lim=(0.0,2), stats=:geometric),
-		:clb=>(unit="m", labe="Liquid CBH", lege=L"\textrm{CBH}", lim=(50, 1f4), stats=:aritmetic),
-		:cldTT=>(unit="K", labe="Cloud top T", lege=L"\rm{\overline{CTT}}", lim=(244, 270), stats=:aritmetic),
-		:Tskin=>(unit="°C", labe="Skin Temp.", lege=L"\textrm{T_{skin}}", lim=(235,270), stats=:aritmetic),
+		:clb=>(unit="m", labe="Liquid CBH", lege=L"\textrm{CBH}", lim=(10, 2f4), stats=:geometric),
+		:cldTT=>(unit="K", labe="Cloud top T", lege=L"\rm{\overline{CTT}}", lim=(245, 273), stats=:aritmetic),
+		:Tsurf=>(unit="K", labe="Skin Temp.", lege=L"\textrm{T_{skin}}", lim=(240,277), stats=:aritmetic),
 		:μSIC=>(unit="%", labe="SIC", lege=L"\rm{\overline{SIC}}", lim=(10,110), stats=:truncated),
 		:σSIC=>(unit="%", labe=L"\rm{\sigma_{SIC}}", lege=L"\rm{\sigma_{SIC}}", lim=(0,30), stats=:geometric),
 		:AμSIC=>(unit="%",labe=L"\textrm{SIC}_\bigodot",lege=L"\textrm{SIC}_\bigodot", lim=(0,100), stats=:truncated),
@@ -755,111 +754,6 @@ begin
 	);
 end
 
-# ╔═╡ aab6bedd-c076-491f-b590-852f179e860b
-begin
-	
-	# general parameters:
-	nσ = 1 #0.5
-	lf_lim = (-0.02, .55)
-	sic_lim = (7, 101) #(78, 101)
-	lf_xin = (.02:0.02:0.6)
-	sic_xin = (10:10:100) |> collect #(75:100) (5, (10:10:100)...)
-	NNcol = cgrad(:starrynight, 15, categorical=true, alpha=0.5, rev=true, scale=:log10); #:grayyellow
-	NNlim =(10, 1.5f3)
-	tags = ["(a)","(b)","(c)","(d)","(e)","(f)","(g)","(i)"]
-	# **********************************************
-	# LWP vs SIC
-	a1 = []
-	b1 = []
-	c1 = []
-
-	# TO PLOT THE GROUP OF VARIABLES ... CHAGE THE for([...]) LINE:
-	# variable options:  #  
-	foreach([:μlwp, :μder, :μiwp, :μier]) do var
-	#foreach([:μδₕ, :μclb, :μcldTT, :μΓ]) do var
-		# For other variables e.g. μder, μier, μcldTT, μlpr, μτc, μτi
-		
-		vv = replace(String(var), "μ" => "") |> Symbol
-		svar = replace(String(var), "μ" => "σ") |> Symbol
-		yy0 = diff([var_meta[vv].lim...])[1]
-		
-		foreach([(-1,:H),(1,:L)]) do (iz, P)
-			
-			tmpdf = rename(dat[(Δz=iz,)], var=>:var_bin, svar=>:var_std)
-			xr2, yr2 = if var==:μΓ
-				(46, 0.16yy0)
-			elseif vv==:δₕ || vv==:clb
-				(76, 0.5yy0)
-			else
-				(80, 0.83yy0)
-			end
-			
-			# For coupled:
-			𝑓 = fₛ #var==:μΓ ? fᵧ : fₛ
-			sic_yin = filter(d->d.coupled==true, tmpdf).var_bin # 𝑓(sic_xin, rfit[:co][P][var].param)
-			# calculation prediction +/- CI exp.(sic_xin/100).^2)
-			pre_yin = predict_curve_fit(exp.((sic_xin/100).^2), rfit[:co][P][var]; Y=sic_yin)
-		tp = plot(sic_xin, pre_yin.prediction,
-			ribbon=pre_yin.sig_ci, #1.0.*(sic_yin.-𝑓(sic_xin, Δβ[:co][P][var][1]), 𝑓(sic_xin, Δβ[:co][P][var][2]).-sic_yin),
-			lc=:blue, lw=2, la=.7, fillalpha=0.2, fillcolor=farben[2], label="",
-			ann=(xr2, yr2+var_meta[vv].lim[1], text(L"r^2="*@sprintf("\$%3.2f\$\n\$\\chi^2=%3.2f\$", R²[:co][P][var], Chi²[:co][P][var]), 12, color=farben[2])), top_margins=-4Plots.mm)
-			
-			# For decoupled: exp.((sic_xin/100).^2)
-			sic_yin = filter(d->d.coupled==false, tmpdf).var_bin # 𝑓(sic_xin, rfit[:de][P][var].param)
-			pre_yin = predict_curve_fit(exp.((sic_xin/100).^2), rfit[:de][P][var]; Y=sic_yin)
-		plot!(sic_xin, pre_yin.prediction,
-			ribbon=1.0.*pre_yin.sig_ci, #(sic_yin.-𝑓(sic_xin, Δβ[:de][P][var][1]), 𝑓(sic_xin, Δβ[:de][P][var][2]).-sic_yin),
-			lc=:red, lw=2, la=.7, fillalpha=0.2, fillcolor=farben[1], label="",
-			ann=(xr2-25, yr2+var_meta[vv].lim[1], text(L"r^2="*@sprintf("\$%3.2f\$\n\$\\chi^2=%3.2f\$", R²[:de][P][var], Chi²[:de][P][var]), 12, color=farben[1]), :left), top_margins=ifelse(isempty(c1), 0, -4)Plots.mm, left_margin=-3.5(1+iz)Plots.mm)
-
-		@df tmpdf scatter!(:sic_bin, :var_bin, yerror=:var_std, group=:coupled, 
-			lc=farben, lw=1.0, la=0.5, marker=([:^ :o], 5), mc=farben, msw=1, msc=:grey,
-			label=ifelse(length(c1)!=5,"", ["de" "co"]), legend=:topright, legendfontsize=8, legend_background_color=false,
-			ann=(97, 0.85yy0 + var_meta[vv].lim[1], popfirst!(tags)),
-			xflip=true, xticks=(sic_xin[1:2:end], ""), xlim=(0, 102),
-			yscale=ifelse( any(vv ∈ (:clb, :δₕ)), :log10, :identity),
-		ylabel=ifelse(iz==1,"",var_meta[vv].labe*" [$(var_meta[vv].unit)]"), ylim=var_meta[vv].lim, # max.(0.1*sign(var_meta[vv].lim[1]), var_meta[vv].lim),
-			left_margins=ifelse(P==:L, -5, 4)Plots.mm)
-		push!(c1, tp)
-		end
-		
-	end
-	# retrieving the y-ticks values from H-pressure:
-	foreach(enumerate(c1)) do (j, tp)
-		iseven(j) && plot!(tp, yticks=(yticks(tp[1])[1], ""))
-	end
-	plot!.([c1[end-1], c1[end]], xticks=(sic_xin[1:2:end], sic_xin[1:2:end]), xlabel="SIC [%]")
-	plot!(c1[1], title="High Pressure")
-	plot!(c1[2], title="Low Pressure")
-
-	# creating the plots' mosaic with layout 4x2
-	cc = plot(c1..., layout=(4,2), tickdir=:out, minorticks=true, guidefontsize=12, tickfontsize=11, size=(800,700), dpi=600, framestyle=:box) #left_margin=4Plots.mm,
-	
-	SAVEFIG ? savefig(cc, "/home/psgarfias/quicklooks/nsa_yearly/$(wintertime)_HL_MicPhys_SIC.png") : cc
-end
-
-# ╔═╡ 1f6657ba-9910-48fc-84a3-399a28d84ef5
-begin
-	idxco = findall(DB[!, :coupled])
-	idxde = findall(.!DB[!, :coupled])
-	myedges = range(1, stop=1000.0, length=50) |> collect
-	Nlf02co = filter(c->(c.lf₀==(true) && c.coupled==(true)), DB).lwp |> length
-	Nlf02de = filter(c->c.lf₀==(true) && c.coupled==(false), DB).lwp |> length
-	#marginal
-	lwphistco = StatsBase.fit(Histogram, DB[idxco, :lwp], myedges)
-	lwphistde = StatsBase.fit(Histogram, DB[idxde, :lwp], myedges)
-	iwphistco = StatsBase.fit(Histogram, DB[idxco, :iwp], myedges)
-	iwphistde = StatsBase.fit(Histogram, DB[idxde, :iwp], myedges)
-		#DB[idxde, :lwp], colorbar_scale=:log10, colorbar=true, colorbar_position=:left)
-	#vline!([-5.5])http://localhost:1234/?secret=QNUDmOcxyerror=:σχᵢ, 
-	scatter(lwphistco.weights, lwphistde.weights, ms=7, zcolor=(myedges), clim=(1, 1000), xscale=:log10, yscale=:log10, xlim=(.51,1f6),ylim=(.51,1f6), label="Liquid", xlabel="# Coupled cases", ylabel="# Decoupled cases", color=NNcol)
-	scatter!(iwphistco.weights, iwphistde.weights, zcolor=(myedges), clim=(1, 800), xscale=:log10, yscale=:log10, xlim=(.51,1f6),ylim=(.51,1f6), ms=6, m=:star6, label="Ice",color=NNcol, colorbar_titlefontsize=13, colorbar_title="\nWater path [g m⁻²]", colorbar_scale=:log10)
-	plot!([1, 1f6],[1, 1f6], ls=:dash, lc=:black, lw=2, label="1:1")
-	plot!([10 1f2; 1f6 1f6],[1 1; 1f5 1f4], lw=2, ls=:dashdot, lc=[:tomato3 :tomato], label=["10:1" "100:1"], frame_style=:box, tickdir=:out, minorticks=true, tickfontsize=13, guidefontsize=14, legendfontsize=13, legend=:topleft, margin=8Plots.mm, size=(600,500), dpi=600)
-	
-	#plot(histco); plot!(histde)
-end
-
 # ╔═╡ cd9c2bd6-50d2-4832-b35d-d4c40891d5e8
 md"""
 #### Subroutine for FFTW funciton:
@@ -867,10 +761,13 @@ md"""
 
 # ╔═╡ 34a57d0f-b3f3-4ed3-9988-0fe50a7c4764
 md"""
-SIC range: 	$(@bind siclim Select([(0,100)=>"All", (0,81)=>"(0,81]", (81,96)=>"(81,96]", (96,98)=>"(96,98]", (98,100)=>"(98,100]"]))
-Variable: $(@bind varva confirm(Select([:T2m, :lwp, :iwp, :σSIC, :clb, :δₕ, :Tskin, :der, :ier, :Γ, :cldTT])))
+SIC range: 	$(@bind siclim Select([(0,100)=>"All", (0,95)=>"(0,95]", (95,100)=>"(95,100]" ]))
+Variable: $(@bind varva confirm(Select([:lwp, :iwp, :σSIC, :clb, :δₕ, :Tsurf, :der, :ier, :Γ, :cldTT, :T2m])))
 Pressure: $(@bind paxva confirm(Select([:H, :L])))
 """
+
+# ╔═╡ a09bbb85-edcc-4dac-a0b1-115ca73207f7
+# [(0,100)=>"All", (0,65)=>"(0,65]", (65,95)=>"(65,95]", (95,98)=>"(95,98]", (98,100)=>"(98,100]"]
 
 # ╔═╡ 6801d499-e203-45e3-b6a1-6e2878779787
 """
@@ -893,21 +790,37 @@ Output:
 
 Note that prediction is considered as ```y(X, b) = b[1] + b[2]X``` with only parameters ```b=cfit.param[pᵢ]``` are considered. If the model is non-linear, then use with caution and ensure the variable ```X``` is converted to fulfill the linear model.
 """
-function predict_curve_fit(X::Vector, cfit; lev::Real=0.95, Y::Vector=[], ω::Union{Vector, AnalyticWeights}=[], pᵢ::UnitRange{Int}=(1:2))::DataFrame
+function predict_curve_fit(X::Vector, cfit; Y::Vector=[], lev::Real=0.95, ω::Union{Vector, AnalyticWeights}=[], pᵢ::UnitRange{Int}=(1:2))::DataFrame
+
 	
 	n = length(X)
-	ω = ifelse(isempty(ω), ones(n), ω)
+
+	# obtaining the weights:
+	ω = ifelse(isempty(ω), cfit.wt, ω) |> collect
+
+	# finding if NaN is present in Y data:
+	inan = isempty(Y) ?  isnan.(ω) : isnan.(Y)
+	
+	if length(ω)!=n && !isempty(Y)
+		# making ω same length as Y when NaNs present:
+		foreach(i->insert!(ω, i, 0), findall(inan))
+	end
+	
 	α = 1- lev
 	β = cfit.param
 	np = length(β)
 	ν = n - length(pᵢ)  # degrees of freedom for 2 parameters
 	newx = [ones(n) X]
+	# prediction y_hat with length n, same as X:
 	y_hat = newx*β[pᵢ]
-	
+
+	# estimating residuals:
 	y_res = isempty(Y) ? cfit.resid : ω.*(y_hat .- Y)
-	
-	y_pre = ifelse(np==2, 0, y_hat .- mean(y_hat))
-	MSE = sum((y_res .- y_pre).^2)/ν
+
+	y_pre = ifelse(np==2, 0.0, y_hat .- mean(y_hat))
+
+	Δy_res = (y_res .- y_pre)[.!inan]
+	MSE = sum(Δy_res.^2)/ν
 	
 	# Note: predict from GLM returns DataFrame(prediction=Ym, lower= -cretinterval, upper=2Ym.-cretinterval)
 	
@@ -920,6 +833,135 @@ function predict_curve_fit(X::Vector, cfit; lev::Real=0.95, Y::Vector=[], ω::Un
 	ret_ci = se.*quantile(TDist(ν), α/2)
 	
 	return DataFrame(prediction=y_hat, sig_ci=ret_ci) #lower= ret_ci, upper=ret_ci)
+end
+
+# ╔═╡ ecbebaf3-95b9-44e4-bd33-84d278ed1c06
+let mdf=filter(d->d.coupled==(false) && !isnan(d.μclb), dat[(Δz=-1,)])
+	@df mdf scatter(:sic_bin, :μclb, yerror=:σclb, xflip=true) #Γ δₕ
+	wk = mdf.σclb.^2 |> err2 -> inv.(err2)/mean(err2)
+	
+	fx(x,β) = @. β[1]+β[2]*exp((x/100)^2) #exp((x/100)^β[3]) # β[2]*(x/100)^β[3] #β[1]-β[2]exp((x/100)^2-1 ) #*log((1.01-x/100)) # β[2] *(1-x/100)+β[3]))
+	
+	fofo = curve_fit(fx, mdf.sic_bin, mdf.μclb, wk, [100, 10.]) #, .100])
+	r2 = cor(mdf.μclb, fx(mdf.sic_bin, fofo.param))^2
+	pp = fofo.param
+	println(pp)
+	x = mdf.sic_bin
+	#println([ones(length(x)) exp.((x/100))]*fofo.param[1:2])
+	fy = fx(x, fofo.param)
+	# predict with intervals:
+	cf = coef(fofo)
+	ci = confidence_interval(fofo, 0.05)    # 5% significance level
+	#println(ci)
+	#tl, bl = fx(x, [ci[1][1], ci[2][2]]), fx(x, [ci[2][1], ci[1][2]]) #ci[1][1] .+ ci[2][2]*x,   ci[1][2] .+ ci[2][1]*x
+	#σp, σm = maximum([tl bl], dims=2) .- 2fy,  2fy .- minimum([tl bl], dims=2)
+	ypre = predict_curve_fit(exp.((x/100).^2 ), rfit[:de][:H][:μclb]) #fofo) #, Y=mdf.μΓ)
+	yerr_low = @. ifelse(ypre.prediction + 3ypre.sig_ci ≤ 0.0, floor(ypre.prediction, digits=1)/3, 3.0ypre.sig_ci)
+	yerr_hig = -3.0ypre.sig_ci
+	
+	plot!(x,ypre.prediction, ribbon=(yerr_low, yerr_hig), fillalpha=0.3, label="curve_fit", yscale=:log10)
+	#plot!(x, fy, label="$(r2)", legend=:bottomright) #; hline!([cf[1]],label="wet")
+end
+
+# ╔═╡ aab6bedd-c076-491f-b590-852f179e860b
+let
+	# general parameters:
+	nσ = 1 #0.5
+	lf_lim = (-0.02, .55)
+#	sic_lim = (7, 101) #(78, 101)
+	sic_xin = range(0, 100, length=20) #max.(0.0, sic_bin) # (10:10:100) |> collect #(75:100) (5, (10:10:100)...)
+	NNcol = cgrad(:starrynight, 15, categorical=true, alpha=0.5, rev=true, scale=:log10); #:grayyellow
+	NNlim =(10, 1.5f3)
+	tags = ["(a)","(b)","(c)","(d)","(e)","(f)","(g)","(i)"]
+	# **********************************************
+	# LWP vs SIC
+	a1 = []
+	b1 = []
+	c1 = []
+	Nsicbin = length(SIC_bin)
+	proxysic = 1:Nsicbin |> d->[0.15 .+ d..., d...]
+	proxybin = range(1, Nsicbin, length=20)
+	
+	# TO PLOT THE GROUP OF VARIABLES ... CHAGE THE for([...]) LINE:
+	# variable options:  #  
+	foreach([:μlwp, :μder, :μiwp, :μier]) do var
+	#foreach([:μδₕ, :μclb, :μcldTT, :μΓ]) do var
+		# For other variables e.g. μder, μier, μcldTT, μlpr, μτc, μτi
+		
+		vv = replace(String(var), "μ" => "") |> Symbol
+		svar = replace(String(var), "μ" => "σ") |> Symbol
+		yy0 = diff([var_meta[vv].lim...])[1]
+		
+		foreach([(-1,:H),(1,:L)]) do (iz, P)
+			
+			tmpdf = rename(dat[(Δz=iz,)], var=>:var_bin, svar=>:var_std)
+			xr2, yr2, ytag = if var==:μΓ && P==:L
+				(0.5Nsicbin, 0.15yy0, 0.85yy0)
+			elseif var==:μΓ && P==:H
+				(0.9Nsicbin, 0.15yy0, 0.85yy0)
+			elseif vv==:δₕ || vv==:clb
+				(0.8Nsicbin, 0.38yy0, 0.45yy0)
+			else
+				(0.8Nsicbin, 0.83yy0, 0.85yy0)
+			end
+
+			# Scale for the y-axis depending on the variable:
+			LogOrLinear = any(var ∈ (:μclb, :μδₕ)) ? :log10 : :identity
+
+			# For coupled:
+			𝑓σ = 3.0
+			sic_yin = filter(d->d.coupled==true, tmpdf).var_bin
+			# calculation prediction +/- CI exp.(sic_xin/100).^2)
+			linear_sic_xin = @. exp((sic_xin/100)^2)
+			pre_yin = predict_curve_fit(linear_sic_xin, rfit[:co][P][var])
+			pre_low = @. ifelse(pre_yin.prediction + 𝑓σ*pre_yin.sig_ci ≤ 0.0 && LogOrLinear==:log10,
+					floor(pre_yin.prediction, digits=2),
+					-𝑓σ*pre_yin.sig_ci)
+			pre_hig = -𝑓σ*pre_yin.sig_ci
+		tp = plot(proxybin, pre_yin.prediction,
+			ribbon=(pre_low, pre_hig),
+			lc=:blue, lw=2, la=.7, fillalpha=0.2, fillcolor=farben[2], label="",
+			ann=(xr2, yr2+var_meta[vv].lim[1], text(L"r^2="*@sprintf("\$%3.2f\$\n\$\\chi^2=%3.2f\$", R²[:co][P][var], Chi²[:co][P][var]), 12, color=farben[2])), top_margins=-4Plots.mm)
+			
+			# For decoupled: exp.((sic_xin/100).^2)
+			sic_yin = filter(d->d.coupled==false, tmpdf).var_bin # 𝑓(sic_xin, rfit[:de][P][var].param)
+			pre_yin = predict_curve_fit(linear_sic_xin, rfit[:de][P][var])
+			pre_low = @. ifelse(pre_yin.prediction + 𝑓σ*pre_yin.sig_ci ≤ 0.0 && LogOrLinear==:log10,
+					floor(pre_yin.prediction, digits=2), -𝑓σ*pre_yin.sig_ci)
+					pre_hig = -𝑓σ*pre_yin.sig_ci
+			
+		plot!(proxybin, pre_yin.prediction,
+			ribbon=(pre_low, pre_hig),
+			lc=:red, lw=2, la=.7, fillalpha=0.2, fillcolor=farben[1], label="",
+			ann=(xr2-0.25Nsicbin, yr2+var_meta[vv].lim[1], text(L"r^2="*@sprintf("\$%3.2f\$\n\$\\chi^2=%3.2f\$", R²[:de][P][var], Chi²[:de][P][var]), 12, color=farben[1]), :left), top_margins=ifelse(isempty(c1), 0, -4)Plots.mm, left_margin=-3.5(1+iz)Plots.mm)
+
+		@df tmpdf scatter!(proxysic .- 0.5, :var_bin, yerror=:var_std, group=:coupled, 
+			lc=farben, lw=2.0, la=0.5, marker=([:^ :o], 5), mc=farben, msw=1, msc=:grey,
+			label=ifelse(length(c1)!=5,"", ["de" "co"]), legend=:topright, legendfontsize=8, legend_background_color=false,
+			ann=(6.8, ytag + var_meta[vv].lim[1], popfirst!(tags)),
+			xflip=true, xticks=(1:Nsicbin, ""), xlim=(1, Nsicbin+0.1), #sic_xin[1:2:end]
+			yscale=LogOrLinear,
+			#yformatter=ifelse( any(vv ∈ (:clb, :δₕ)), y->y/1f3, :auto),
+		ylabel=ifelse(iz==1,"",var_meta[vv].labe*" [$(var_meta[vv].unit)]"), ylim=var_meta[vv].lim, # max.(0.1*sign(var_meta[vv].lim[1]), var_meta[vv].lim),
+			left_margins=ifelse(P==:L, -5, 4)Plots.mm)
+		push!(c1, tp)
+		end
+		
+	end
+	# retrieving the y-ticks values from H-pressure:
+	foreach(enumerate(c1)) do (j, tp)
+		iseven(j) && plot!(tp, yticks=(yticks(tp[1])[1], ""))
+	end
+	plot!.([c1[end-1], c1[end]], xticks=(1:Nsicbin, SIC_bin), xlabel="SIC [%]")  #sic_xin[1:2:end], sic_xin[1:2:end]
+	plot!(c1[1], title="High Pressure")
+	plot!(c1[2], title="Low Pressure")
+
+	# creating the plots' mosaic with layout 4x2
+	cc = plot(c1..., layout=(4,2), tickdir=:out, minorticks=true, guidefontsize=12, tickfontsize=11, size=(800,700), dpi=600, framestyle=:box) #left_margin=4Plots.mm,
+	
+	SAVEFIG ? savefig(cc, "/home/psgarfias/quicklooks/nsa_yearly/$(wintertime)_HL_MicPhys_SIC.png") : cc
+	#savefig(cc, "/home/psgarfias/Downloads/quicklooks/nsa/$(wintertime)_HL_MicPhys_SIC.png")
+	#savefig(cc, "/home/psgarfias/Downloads/quicklooks/nsa/$(wintertime)_HL_MacPhys_SIC.png")
 end
 
 # ╔═╡ d207a342-af32-4d36-b7d9-41505345ef87
@@ -968,12 +1010,15 @@ function t_test4model(X::Vector, Y::Vector, Yerr::Vector, model::LsqFit.LsqFitRe
 	RMSE = √(sum(ϵ²)/n)/IQR
 
 	
-	SSE = sum(ωt.*ϵ²)
-	SST = sum(ωt.*(Y .- y̅).^2)
+	SSE = sum(ϵ²)  #ωt.*
+	SST = sum((Y .- y̅).^2) #ωt.*
 	R_sq = 1 - SSE/SST
 
 	σ² = eltype(Yerr)<:Tuple ? ((last.(Yerr) .- first.(Yerr))/2).^2 : Yerr.^2
+	σ² = @. ifelse(round(σ², digits=3) != 0.000, σ², 1.0)
+	
 	Chi_sq = sum(ϵ²./σ²)/ν
+
 	
 	# T-statistics:
 	tT = μₜ./σₜ
@@ -990,26 +1035,16 @@ begin
 	siclimstr = siclim==true ? "All SIC" : @sprintf("%d < SIC ≤ %d", siclim...) #  ("SIC ∈ (%d,%d]", siclim...)
 end
 
-# ╔═╡ 8e7dea67-d49a-442d-a76e-6bbd7172ebcc
-begin
-	stat_labe = Dict(:q50=>"median ", :q25=>"Q1 ", :q75=>"Q3 ", :μ=>"mean ");
-	# Plotting time series with original data points:
-	@df mdf[:q50][paxva] scatter(:winter .+[.05 -.05], [:Y_de :Y_co], yerror=[:ϵ_de :ϵ_co], mc=farben, lw=2, la=0.6, lc=farben,  marker=([:^ :o], 6), mscolor=:grey, msw=2, label=ifelse(siclim==(10,100), ["de: "*L"\mu_{1/2}\pm \sigma_{m}" "co: "*L"\mu_{1/2}\pm \sigma_{m}"], ""), legend_column=2, legendfontsize=10, legend_position=:top, legendforegroundcolor=false, legendbackgroundcolor=false,
-	gridlinewidth=.5, frame=:box, tickdir=:out, yminorticks=true, ytickfontsize=12, yguidefontsize=14,
-	xtickfontsize=11, xguidefontsize=11,
-	title=siclimstr*" & "*String(paxva)*"-pressure")
-
-	# Plotting time series with smoothed data points:
-	#@df mdf[:q50][paxva] scatter!(:winter .+[.05 -.05], [:S_de :S_co], marker=:x, ms=5, mc=farben, label=false)
-	
-	# Plotting fitted trend lines:
-	@df mdf[:q50][paxva] plot!(:winter, [:lin_de :lin_co], ribbon=[:err_de :err_co], lw=2, la=0.9, fillalpha=0.2, lc=farben, fillcolor=farben, label=get_trend_str(ravstat, varva, :q50, paxva; vargof=:r2chi2).*"\n".*get_trend_str(ravstat, varva, :q50, paxva),
-	xtick=(:winter, strwinter), xrot=30, xlabel = "Wintertime [+2000 year]",
-	yscale=ifelse(any(varva ∈ (:δₕ, :clb)), :log10, :identity), ylabel = var_meta[varva].labe*" [$(var_meta[varva].unit)]", ylim=yye_lims,
-	#ylim=ifelse(varva!=:Γ, var_meta[varva].lim.*(1,1.0), (0, 10)), # for Γ_cloud (0, 10) #var_meta[varva].lim.*(1,1.0)
-	legend=(0.08, 0.92), bottom_margins=+2Plots.mm)
-	
-end
+# ╔═╡ 55ea71af-8398-40bf-858d-1a039f20201f
+ let fmt = Printf.Format("%s_%s_SIC%03d-%03d.csv")
+  	dirfmt = Printf.Format("buffer_data/%s")
+  	dirout = Printf.format(dirfmt, varva)
+  	!isdir(dirout) && mkdir(dirout)
+  	ravpathout = joinpath(dirout, Printf.format(fmt, "moavstat", varva, (siclim==(0,100) ? (100,100) : siclim)...) )
+  	#CSV.write(ravpathout, ravstat)
+  	wavpathout = joinpath(dirout, Printf.format(fmt, "ensostat", varva, (siclim==(0,100) ? (100,100) : siclim)...) )
+  	#CSV.write(wavpathout, wavstat)
+ end
 
 # ╔═╡ e868b491-2463-4e0a-a7be-60f896eed14f
 """
@@ -1028,7 +1063,7 @@ function get_trend_str(df::DataFrame, var::Symbol, stat::Symbol, pax::Symbol; va
 	
 	if isnothing(vargof)
 		# Selecting the variable and trend values to show:
-		trend_str = select(df, [:hat, :sig, :coupled]=>ByRow((x,y,U)->"\$\\frac{\\Delta}{\\Delta t}\$= %+2.1f \$\\pm\$%2.1f %s"(x, y, "[$(var_meta[var].unit) dec⁻¹]")) => :lege, :type, :coupled, :pax)
+		trend_str = select(df, [:hat, :sig, :coupled]=>ByRow((x,y,U)->"\$\\frac{\\Delta}{\\Delta t}\$=%+2.1f\$\\pm\$%2.1f %s"(x, y, "[$(var_meta[var].unit) dec⁻¹]")) => :lege, :type, :coupled, :pax)
 		
 	elseif vargof==:chi2freq
 		trend_str = select(df, [:chi², :θ]=>ByRow((x, P)->"\$\\chi^2\$=%3.2f  @  \$\\nu_k^{-1}\$=%2.1f [yrs]"(x,inv(P)) ) => :lege, :type, :coupled, :pax)
@@ -1125,7 +1160,7 @@ function enso_fit(mdf::Dict, var::Symbol, cc::Symbol, pa::Symbol; θ = nothing, 
 	K = let 𝑉=[mtest.Chi_sq, mtest.RMSE^2]
 		#, ([(1-R_sq)^2, RMSE^2]) #(sqrt∘sum)([inv(R_sq)^2, RMSE^2])
 		#(0.0 ≤ mtest.RMSE ≤1.0) && push!(𝑉, mtest.RMSE^2)
-		(0.0 ≤ mtest.R_sq ≤1.0) && push!(𝑉, 1 - mtest.R_sq)
+		(-0.2 ≤ mtest.R_sq ≤1.0) && push!(𝑉, 1 - mtest.R_sq)
 		(sqrt∘mean)(𝑉)
 	end
 	
@@ -1155,10 +1190,18 @@ end
 #@df filter(d->d.lwp<1f3 && d.iwp<1.5f3, DBraw) histogram(log10.([:lwp :iwp]), yscale=:log10); vline!([log10(5)])
 #@df filter(d->d.winter==2016, DB) scatter(:lwp, :iwp, m=:+, ms=1, xscale=:log10, yscale=:log10, minorgrid=true); vline!([5 0.8f3]); hline!([5 3f3]) # filter(d->d.lwp>0 && d.iwp>0, DB)
 
-# ╔═╡ e533eb73-dfaf-4928-9be6-72340edca990
-@df DataFrame((:co, :de).=>[rfits[c][:q50][paxva].resid for c in (:co, :de)]) density([:co, :de], bandwidth=1)
-
 # ╔═╡ 5d562554-9112-4856-b7a4-5e8ff22ea3d5
+"""
+Function to obtain the fitting trend using running average of time series.
+```julia-repl
+julia> rafits = co_de_fit(DB; fitmodel=false, window=10, edges=false)
+```
+WHERE:
+* ```DB::DataFrame``` contains the data to fit and get trends,
+* ```fitmodel::Bool``` (default ```false```),
+* ```window::Int``` (dafault 5) the size of the average window to use for the averaging,
+* ```edges::Bool``` (dafault ```true```) whether or not to include the edges of ```window/2```.
+"""
 function co_de_fit(newDB; fitmodel=false, window=6, edges=true)
 
 	# Assigning keys for the type of statistics to use for fitting curve: e.g. q50 is median ± mad
@@ -1205,9 +1248,9 @@ function co_de_fit(newDB; fitmodel=false, window=6, edges=true)
 		tmdf[!, :S_de] = CLIMA.ave_window(tmdf.Y_de; w=window, edges=edges)
 		
 		# Defining the weights for coupled/decoupled time series based on winter's standard deviation:
-		scale_it(E,M) = (typeof(E)<:Tuple ? mean(E) : E)/M |> x->ifelse(isnan(x), 0, x)
+		scale_it(E,M) = (typeof(E)<:Tuple ? last(E)-first(E) : E)/M |> x->ifelse(isnan(x), 0, x)
 		function weight_it(err)
-			sig_err = [(typeof(E)<:Tuple ? mean(E) : E)^2 for E in err] .|> inv
+			sig_err = [(typeof(E)<:Tuple ? last(E)-first(E) : E)^2 for E in err] .|> inv
 			iout = @. isnan(sig_err) || ~isfinite(sig_err)
 			tot_err = all(iout) ? 1.0 : mean(sig_err[.~iout])
 			sig_err[iout] .= tot_err
@@ -1215,12 +1258,12 @@ function co_de_fit(newDB; fitmodel=false, window=6, edges=true)
 			return sig_err./tot_err
 		end
 		
-		ω_co = AnalyticWeights( weight_it(tmdf.ϵ_co)) #(@. abs(1 - scale_it(tmdf.ϵ_co, tmdf.Y_co)^2 ) )
-		ω_de = AnalyticWeights( weight_it(tmdf.ϵ_de)) #@. abs(1 - scale_it(tmdf.ϵ_de, tmdf.Y_de)^2 ) )
+		tmdf[!, :ω_co] = AnalyticWeights( weight_it(tmdf.ϵ_co)) #(@. abs(1 - scale_it(tmdf.ϵ_co, tmdf.Y_co)^2 ) )
+		tmdf[!, :ω_de] = AnalyticWeights( weight_it(tmdf.ϵ_de)) #@. abs(1 - scale_it(tmdf.ϵ_de, tmdf.Y_de)^2 ) )
 		
 		# Fitting the smoothed time series to yₜ :
-		f_co = filter(d->!isnan(d.S_co), tmdf) |> df-> curve_fit(𝑦ₜ, df.winter, df.S_co, ω_co, [10, 0.5]) #
-		f_de = filter(d->!isnan(d.S_de), tmdf) |> df-> curve_fit(𝑦ₜ, df.winter, df.S_de, ω_de, [10, 0.5]) #
+		f_co = filter(d->!isnan(d.S_co), tmdf) |> df-> curve_fit(𝑦ₜ, df.winter, df.S_co, df.ω_co, [10, 0.5]) #
+		f_de = filter(d->!isnan(d.S_de), tmdf) |> df-> curve_fit(𝑦ₜ, df.winter, df.S_de, df.ω_de, [10, 0.5]) #
 		
 		#f_co = filter(d->!isnan(d.S_co), tmdf) |> df-> lm(@formula(S_co ~ winter), df; wts=ω_co)
 		#f_de = filter(d->!isnan(d.S_de), tmdf) |> df-> lm(@formula(S_de ~ winter), df; wts=ω_de)
@@ -1230,9 +1273,9 @@ function co_de_fit(newDB; fitmodel=false, window=6, edges=true)
 		rfits[:de][k][px] = f_de
 		
 		# For coupled
-		tmdf = hcat(tmdf, pred_low_hig(tmdf.winter, tmdf.Y_co, f_co, ω_co) |> x->rename(x, [:lin_co, :err_co]) )
+		tmdf = hcat(tmdf, pred_low_hig(tmdf.winter, tmdf.Y_co, f_co, tmdf.ω_co) |> x->rename(x, [:lin_co, :err_co]) )
 		# For decoupled
-		tmdf = hcat(tmdf, pred_low_hig(tmdf.winter, tmdf.Y_de, f_de, ω_de) |> x->rename(x, [:lin_de, :err_de]) )
+		tmdf = hcat(tmdf, pred_low_hig(tmdf.winter, tmdf.Y_de, f_de, tmdf.ω_de) |> x->rename(x, [:lin_de, :err_de]) )
 			
 		dffit[k][px] = tmdf
 		end
@@ -1248,28 +1291,29 @@ mdf, rfits = let var=varva
     newDB = filter(d->d[var]>(low_threshold) && (siclim[1] < d.μSIC ≤ siclim[2]), DB)
     rename!(newDB, Dict(var=>:Y_var))
 	# computing the data fitting using running window average method:
-	co_de_fit(newDB; fitmodel=true, window=7, edges=true)
+	co_de_fit(newDB; fitmodel=true, window=10, edges=true)
 end;
 
 # ╔═╡ fb63d204-e954-4813-bdc5-b02b67c080c5
 let df=DataFrame(x=mdf[:q50][paxva].winter, y=mdf[:q50][paxva].S_de, Y=mdf[:q50][paxva].Y_de, e=mdf[:q50][paxva].ϵ_de)
 	#(x=(1:12),y= 20.1 .+ 0.86*(1:12) .+0.8randn(12), e=rand(12))
+	filter!(d->!isnan(d.y), df)
 	
 	lev = 0.95
 	mfit = lm(@formula(y ~ x), df)
-	println("type of lm fit: ", typeof(mfit)<:StatsModels.TableRegressionModel)
+	#println("type of lm fit: ", typeof(mfit)<:StatsModels.TableRegressionModel)
 	R_cholU = [1.6248076809271923 0.0; 3.059411708155671 25.495097567963924]
 	n = length(df.x)
 	newx = [ones(n) df.x]
 	
 	chol = cholesky!(mfit.model.pp)
-	print("pp=", chol isa CholeskyPivoted, " ")
+	#print("pp=", chol isa CholeskyPivoted, " ")
 	ip = invperm(chol.p)
     chol.U[ip, ip] |> println
 
 	p = coef(mfit)
 	lmint = confint(mfit, level=lev)
-	println("lm CI:", lmint)
+	#println("lm CI:", lmint)
 	
 
 	garbage = predict(mfit, df, level=lev, interval=:confidence) #DataFrame(prediction=
@@ -1278,23 +1322,22 @@ let df=DataFrame(x=mdf[:q50][paxva].winter, y=mdf[:q50][paxva].S_de, Y=mdf[:q50]
 	garbage[!, :lm] = newx*p #f(df.x, p)
 
 	#println("pp=",cholesky!(mfit.model.pp).U)
-	println(mfit)
+	#println(mfit)
 	
 	residvar = ones(size(newx,2)) * deviance(mfit)/dof_residual(mfit)
 	retvariance = (newx/R_cholU).^2 * residvar
 	retinterval = quantile(TDist(dof_residual(mfit)), (1. - lev)/2)*sqrt.(retvariance)
-	println("retinterval", retinterval, "  residvar", residvar)
+	#println("retinterval", retinterval, "  residvar", residvar)
 	garbage[!, :lm_lo] = garbage.lm .- retinterval
 	garbage[!, :lm_up] = garbage.lm .+ retinterval
-	#garbage[!, :lm_21] = newx*[lmint[1,2], lmint[2,1]] |> vec #maximum([tl bl], dims=2) |> vec #.-  garbage.lm 
-	#garbage[!, :lm_22] = newx*[p[1], lmint[2,2]] |> vec #minimum([tl bl], dims=2) |> vec #garbage.lm .- 
-
+	
 	# For curve_fit
 	f(x,p) = @. p[1] + p[2]*x
 	
-	wwe = inv.(df.e.^2) |> w->w./mean(w)
+	wwe = ifelse.(df.e .> 0.0, inv.(df.e.^2), 0.0) |> w->w./mean(w)
+	#println("x=", df.x, " y=",df.y, " we=",wwe)
 	cfit = curve_fit(f, df.x, df.y, wwe, [1,0.5]) # inv.(df.e.^2).*df.Y, 
-	println("type of curve_fit: ", typeof(cfit)<:LsqFit.LsqFitResult)
+	#println("type of curve_fit: ", typeof(cfit)<:LsqFit.LsqFitResult)
 	cint = confidence_interval(cfit, 0.95)
 	cresvar = ones(size(newx,2)) * sum(cfit.resid.^2)/dof(cfit)
 	cretvariance = (newx/R_cholU).^2 * cresvar
@@ -1305,14 +1348,14 @@ let df=DataFrame(x=mdf[:q50][paxva].winter, y=mdf[:q50][paxva].S_de, Y=mdf[:q50]
 	m = f(df.x, cfit.param)
 	
 	cstd = stderror(cfit)
-	println("coef=",cfit.param, "err=", cstd, "cint=", cint)
+	#println("coef=",cfit.param, "err=", cstd, "cint=", cint)
 	
 	garbage[!, :cfit] = m
 	garbage[!, :cfit_lo] = m .+ cretinterval #f(df.x, cfit.param .- cstd)
 	garbage[!, :cfit_up] = m .- cretinterval #f(df.x, cfit.param .+ cstd)
 	
 	qq = predict_curve_fit(df.x, cfit)
-	println(qq)
+	#println(qq)
 	@df df scatter(:x, :Y, label="data", mc=:gray) # yerror=:e,
 	@df garbage plot!(df.x, :prediction, ribbon=(:prediction .- :lower, :upper .- :prediction), fillalpha=0.2, lc=:blue, fillcolor=:blue, label=round(10p[2], digits=3))
 	#@df garbage plot!(df.x, :lm, ribbon=(:lm_lo, :lm_up), fillalpha=0.2, lc=:green, fillcolor=:green)
@@ -1352,6 +1395,12 @@ begin
 		tmpplot
 	end
 end
+
+# ╔═╡ e533eb73-dfaf-4928-9be6-72340edca990
+@df DataFrame((:co, :de).=>[rfits[c][:q50][paxva].resid for c in (:co, :de)]) density([:co, :de], bandwidth=1)
+
+# ╔═╡ 9e498f61-a297-4529-a7a1-1692e6cff222
+CLIMA.ave_window(sind.(0:15:270); w=10, edges=false)
 
 # ╔═╡ 2cc166c0-464b-41a4-be91-44d936f1eedf
 @df filter(d->!isnan(d.lwp) && d.Tskin>(-100), DB) groupedboxplot(:winter, :Tskin, group=:paₓ, bar_width=0.4, outliers=false, fillcolor=farben, label=["de" "co"], xtick=jahren, ylabel="LWP [g m⁻²]", size=(850,400), left_margin=3Plots.mm, title="Pressure level L")
@@ -1451,14 +1500,16 @@ end
 
 # ╔═╡ ac5548e8-093b-496e-b742-eb12f0588a6c
 # Loading database for PDO index: pdo_index.json or  ersst.v5.pdo.dat
-pdo = let dt=CLIMA.load_climate_index("/home/psgarfias/Downloads/pdo_index.json"; Tlim=(DateTime(1990,1), DateTime(2025,03)));
+pdo = let dt_path = joinpath(pwd(), "buffer_data", "clima", "pdo_index.json")
+    dt=CLIMA.load_climate_index(dt_path; Tlim=(DateTime(1990,1), DateTime(2025,03)));
 	add_week_winter!(dt)
 	dt
 end;
 
 # ╔═╡ ac0eafdc-8b05-480a-ac82-4b7a9bdf4530
 # Loading database for ENSO index: enso_index.json or enso_index.json
-enso = let dt=CLIMA.load_climate_index("/home/psgarfias/Downloads/enso_index.json"; Tlim=(DateTime(1990,1), DateTime(2025,03)));
+enso = let dt_path = joinpath(pwd(), "buffer_data", "clima", "enso_index.json")
+    dt=CLIMA.load_climate_index(dt_path; Tlim=(DateTime(1990,1), DateTime(2025,03)));
 	add_week_winter!(dt)
 	dt
 end;
@@ -1466,8 +1517,9 @@ end;
 # ╔═╡ 4cf8a75a-9838-4049-90ee-92028f9cf545
 # Loading database for Arctic Oscilation index: 
 # 
-aoi = let df=CLIMA.load_climate_index("https://ftp.cpc.ncep.noaa.gov/cwlinks/norm.daily.ao.cdas.z1000.19500101_current.csv"; Tlim=(DateTime(1990,1), DateTime(2025,03)));
-	#filter!(d->month(d.date) ∈ [11,12,1,2,3,4], df)
+aoi = let dt_path = joinpath(pwd(), "buffer_data", "clima", "norm.daily.ao.cdas.z1000.19500101_current.csv")
+        #"https://ftp.cpc.ncep.noaa.gov/cwlinks/norm.daily.ao.cdas.z1000.19500101_current.csv" 
+    df=CLIMA.load_climate_index(dt_path; Tlim=(DateTime(1990,1), DateTime(2025,03)));
 	add_week_winter!(df)
 	df
 end;
@@ -1551,9 +1603,9 @@ let df=dfts
 		
 	 	push!(met, tmp)
 	 end
-	plot!(met[2nn-1], xticks=(xwinter, strwinter), xrot=30, bottom_margins=+1.5Plots.mm)
+	plot!(met[2nn-1], xticks=(xwinter, strwinter), xrot=30, xlabel="Wintertime [+2000 year]", bottom_margins=+1.5Plots.mm)
 	
-	plot(met..., layout=grid(nn,2, widths=(.85,.15)), size=(800,700))
+	plot(met..., layout=grid(nn,2, widths=(.85,.15)), size=(800,700), dpi=400)
 	#savefig("/home/psgarfias/Downloads/quicklooks/nsa/TimeSeries_$(wintertime)_clima.png")
 end
 
@@ -1605,7 +1657,7 @@ let tmp=groupby(DB, :winter)
 	end
 	
 	plot(plx..., layout=(1,2), size=(700,600), right_margin=2Plots.mm)
-	#savefig("/home/psgarfias/Downloads/quicklooks/nsa/$(wintertime)_SIC_2hist.png")
+	savefig("/home/psgarfias/Downloads/quicklooks/nsa/$(wintertime)_SIC_2hist.png")
 end
 
 # ╔═╡ 67552873-5276-4955-9dff-358eaf9c390a
@@ -1661,6 +1713,9 @@ end;
 # ╔═╡ 4cb72574-9b2a-4482-b12e-642eb137c0d1
 Lmin = filter(d->d.type==:q50, allwavstat) |> df->combine(groupby(df, [:pax, :coupled]), :cost =>argmin => :Kmin) |> df->transform(df, :Kmin => ByRow(i->Θₚ.νₖ[i]) => :θmin)
 
+# ╔═╡ e13860c4-cd7a-4d37-9dc4-cb2c01f177ad
+inv.(Lmin.θmin)
+
 # ╔═╡ cbeeec75-64bb-4507-aa33-df9b1b90cad1
 # selection of DataFrame containing only the ENSO/PDO frequency selected:
 wavstat = combine(groupby(allwavstat, [:pax, :coupled])) do Gdf 
@@ -1669,17 +1724,6 @@ wavstat = combine(groupby(allwavstat, [:pax, :coupled])) do Gdf
 	Imin = filter(d->d.pax==pp && d.coupled==cc, Lmin).θmin[1]
 	filter(d->d.θ==Imin, Gdf)
 end;
-
-# ╔═╡ 55ea71af-8398-40bf-858d-1a039f20201f
- let fmt = Printf.Format("%s_%s_SIC%03d-%03d.csv")
-  	dirfmt = Printf.Format("buffer_data/%s")
-  	dirout = Printf.format(dirfmt, varva)
-  	!isdir(dirout) && mkdir(dirout)
-  	ravpathout = joinpath(dirout, Printf.format(fmt, "moavstat", varva, (siclim==(0,100) ? (100,100) : siclim)...) )
-  	CSV.write(ravpathout, ravstat)
-  	wavpathout = joinpath(dirout, Printf.format(fmt, "ensostat", varva, (siclim==(0,100) ? (100,100) : siclim)...) )
-  	CSV.write(wavpathout, wavstat)
- end
 
 # ╔═╡ a1941c4d-28f9-4f25-a3ad-350324003a33
 # Plotting the trend for different statistical variables, coupling and pressure systems:
@@ -1731,8 +1775,8 @@ begin
 	)
 
 	# Estimaint the limits for the Y-Axis based on the data and given lims in 'var_meta[].lim' variable:
-	yye_lims = extrema([var_meta[varva].lim..., extrema(mdf[:q50][paxva].Y_co)..., extrema(mdf[:q50][paxva].Y_de)...])
-	yye_lims = (yye_lims[1], yye_lims[2]*1.01)
+	yye_lims = extrema([var_meta[varva].lim...]) #, extrema(mdf[:q50][paxva].Y_co)..., extrema(mdf[:q50][paxva].Y_de)...])
+	yye_lims = (yye_lims[1], yye_lims[2]*1.00)
 	# finding the index of frequency to show and getting curve fit parameters:
 		
 	efit_co, efit_de = let Ico = argmin(abs.(efits[:co][:q50][:θ] .- θₖ[:co]))
@@ -1744,7 +1788,10 @@ begin
 	# Calculating uncertainty region:
 	
 	# plotting the periodic fitted curve:
-	plot!(2011:0.2:2024, [w->𝑦ₛ(w, βd; νₛ=θₖ[:de]), w->𝑦ₛ(w, βc; νₛ=θₖ[:co])], lw=2, la=0.7, lc=farben, ls=:dash, label=get_trend_str(wavstat, varva, :q50, paxva; vargof=:chi2freq))
+	plot!(2011:0.1:2024, [w->max.(1, 𝑦ₛ(w, βd; νₛ=θₖ[:de])), w->𝑦ₛ(w, βc; νₛ=θₖ[:co])],
+		lw=2, la=0.7, lc=farben, ls=:dash,
+		label=get_trend_str(wavstat, varva, :q50, paxva; vargof=:chi2freq))
+	
 	# plotting the trend line (2nd coefficient from fitted curve):
 	@df let w=mdf[:q50][paxva].winter
 		
@@ -1752,15 +1799,54 @@ begin
 		newx = w * [0 1]; newx[:,1].=1;
 		Ŷde = 𝑦ₜ(w, βd[1:2])
 		Ŷco = 𝑦ₜ(w, βc[1:2])
+
+		Y_de = mdf[:q50][paxva].Y_de
 		
-		ret_de = predict_curve_fit(w, efit_de) |> df->rename(df, [:lin_de, :err_de]) #, :up_de])
-		ret_co = predict_curve_fit(w, efit_co) |> df->rename(df, [:lin_co, :err_co]) #, :up_co])
-		hcat(DataFrame(winter=w), ret_de, ret_co)
-	end	plot!(:winter, [:lin_de :lin_co], ribbon=[:err_de :err_co], lc=farben, lw=2, la=0.9, ls=:solid, fillalpha=0.2, fillcolor=farben, label=get_trend_str(wavstat, varva, :q50, paxva),
-	xtick=(:winter,strwinter), xrot=30, xlabel = "Wintertime [+2000 year]",
-	#ylim=ifelse(varva != :Γ, yye_lims, (0, 10)),
-	#ylim=(100, 4500), yscale=:log10, # for Γ_cloud (0, 10) #yye_lims, 
+		ret_de = predict_curve_fit(w, efit_de, Y=Y_de) |> df->rename(df, [:lin_de, :err_de]) #, :up_de])
+		transform!(ret_de, [:lin_de, :err_de] => ByRow( (p,s)-> (ifelse.(p+s≤0, 0.95floor(p, digits=1), -s), -s) ) =>:sig_de)
+		
+		Y_co = mdf[:q50][paxva].Y_co
+		ret_co = predict_curve_fit(w, efit_co, Y=Y_co) |> df->rename(df, [:lin_co, :err_co]) #, :up_co])
+		transform!(ret_co, [:lin_co, :err_co] => ByRow( (p,s)-> (ifelse.(p+s≤0, floor(0.9p, digits=1), -s), -s) ) =>:sig_co)
+		
+		ttcat = hcat(DataFrame(winter=w), ret_de, ret_co)
+		#println(ttcat)
+		ttcat
+	end	plot!(:winter, [:lin_de :lin_co], ribbon=[(first.(:sig_de), last.(:sig_de)) (first.(:sig_co), last.(:sig_co))], lc=farben, lw=2, la=0.9, ls=:solid, fillalpha=0.2, fillcolor=farben, label=get_trend_str(wavstat, varva, :q50, paxva),
+	xtick=(:winter,strwinter), xrot=30, xlabel = "Wintertime [+2000 year]", #yscale=:log10, 
+	ylim=ifelse(varva==:lwp, (1, 500), yye_lims), #ifelse(varva != :Γ, yye_lims, (0, 10)),
+	#ylim=(100, 4500), yscale=:log10, # for Γ_cloud (0, 10) #
 	ylabel = var_meta[varva].labe*" [$(var_meta[varva].unit)]", bottom_margins=+2Plots.mm, legend=(0.1, 0.96)) #
+	
+end
+
+# ╔═╡ 8e7dea67-d49a-442d-a76e-6bbd7172ebcc
+begin
+	stat_labe = Dict(:q50=>"median ", :q25=>"Q1 ", :q75=>"Q3 ", :μ=>"mean ");
+	# Plotting time series with original data points:
+	@df mdf[:q50][paxva] scatter(:winter .+[.05 -.05], [:Y_de :Y_co], yerror=[:ϵ_de :ϵ_co], mc=farben, lw=2, la=0.6, lc=farben,  marker=([:^ :o], 6), mscolor=:grey, msw=2, label=ifelse(siclim==(10,100), ["de: "*L"\mu_{1/2}\pm \sigma_{m}" "co: "*L"\mu_{1/2}\pm \sigma_{m}"], ""), legend_column=2, legendfontsize=10, 
+		legendforegroundcolor=false, legendbackgroundcolor=false,
+	gridlinewidth=.5, frame=:box, tickdir=:out, yminorticks=true, ytickfontsize=12, yguidefontsize=14,
+	xtickfontsize=11, xguidefontsize=11,
+	title=siclimstr*" & "*String(paxva)*"-pressure")
+
+	# Plotting time series with smoothed data points:
+	#@df mdf[:q50][paxva] scatter!(:winter .+[.05 -.05], [:S_de :S_co], marker=:x, ms=5, mc=farben, label=false)
+	
+	# Plotting fitted trend lines:
+	
+	@df  let df = mdf[:q50][paxva]
+		
+		transform!(df, [:lin_co, :err_co] => ByRow( (p,s)-> (ifelse.(p+s≤0, floor(0.9p, digits=1), -s), -s) ) =>:sig_co)
+		transform!(df, [:lin_de, :err_de] => ByRow( (p,s)-> (ifelse.(p+s≤0, floor(0.9p, digits=1), -s), -s) ) =>:sig_de)
+		#ttcat = hcat(DataFrame(winter=w), ret_de, ret_co)
+		
+		df
+	end plot!(:winter, [:lin_de :lin_co], ribbon=[(first.(:sig_de), last.(:sig_de)) (first.(:sig_co), last.(:sig_co))], lw=2, la=0.9, fillalpha=0.2, lc=farben, fillcolor=farben, label=get_trend_str(ravstat, varva, :q50, paxva; vargof=:r2chi2).*"\n".*get_trend_str(ravstat, varva, :q50, paxva),
+	xtick=(:winter, strwinter), xrot=30, xlabel = "Wintertime [+2000 year]",
+	yscale=ifelse(any(varva ∈ (:δₕ, :clb, :lwp)), :log10, :identity), ylabel = var_meta[varva].labe*" [$(var_meta[varva].unit)]", ylim=ifelse(varva==:lwp, (5, 500), yye_lims),
+	#ylim=ifelse(varva!=:Γ, var_meta[varva].lim.*(1,1.0), (0, 10)), # for Γ_cloud (0, 10) #var_meta[varva].lim.*(1,1.0)
+	legend=(0.09, 0.9), bottom_margins=+2Plots.mm, left_margins=+2Plots.mm)
 	
 end
 
@@ -1789,7 +1875,7 @@ begin
 		efit_ln = ifelse(i==1, efit_de, efit_co)
 		
 		# plotting the periodic fitted curve:
-		plot!(tmp, 2011:0.2:2024, w->𝑦ₛ(w, β; νₛ=θₖ[cc]), lw=2, la=0.7, lc=farben[i], ls=:dash, label=get_trend_str(wavstat, varva, :q50, paxva; vargof=:chi2freq)[i])
+		plot!(tmp, 2011:0.1:2024, w->𝑦ₛ(w, β; νₛ=θₖ[cc]), lw=2, la=0.7, lc=farben[i], ls=:dash, label=get_trend_str(wavstat, varva, :q50, paxva; vargof=:chi2freq)[i])
 
 		@df let w=mdf[:q50][paxva].winter
 			Y = ifelse(i==1, mdf[:q50][paxva].Y_de, mdf[:q50][paxva].Y_co)
@@ -1797,16 +1883,17 @@ begin
 			newx = w * [0 1]; newx[:,1].=1;
 			Ŷ = 𝑦ₜ(w, β[1:2])
 			
-			ret_ln = predict_curve_fit(w, efit_ln) |> df->rename(df, [:lin_y, :err_y])
+			ret_ln = predict_curve_fit(w, efit_ln, Y=Y) |> df->rename(df, [:lin_y, :err_y])
+			transform!(ret_ln, [:lin_y, :err_y] => ByRow( (p,s)-> (ifelse.(p+s≤0, 0.95floor(p, digits=1), -s), -s) ) =>:sig_de)
 			
 			hcat(DataFrame(winter=w), ret_ln)
-		end plot!(tmp, :winter, :lin_y, ribbon=:err_y, lc=farben[i], lw=2, la=0.9, ls=:solid, fillalpha=0.2, fillcolor=farben[i], label=get_trend_str(wavstat, varva, :q50, paxva)[i], xtick=(:winter,strwinter),
+		end plot!(tmp, :winter, :lin_y, ribbon=(first.(:sig_de), last.(:sig_de)), lc=farben[i], lw=2, la=0.9, ls=:solid, fillalpha=0.2, fillcolor=farben[i], label=get_trend_str(wavstat, varva, :q50, paxva)[i], xtick=(:winter,strwinter),
 	xrot=30, xlabel = "Wintertime [+2000 year]",
-		yscale=ifelse(any(varva ∈ (:δₕ, :clb)), :log10, :identity), ylabel = ifelse(i==1, var_meta[varva].labe*" [$(var_meta[varva].unit)]", ""),
+		yscale=ifelse(any(varva ∈ (:δₕ, :clb, :iw3p, :lwp)), :log10, :identity), ylabel = ifelse(i==1, var_meta[varva].labe*" [$(var_meta[varva].unit)]", ""), ylim=ifelse(varva==:lwp, (5, 500), yye_lims), 
 		legend=(0.1, 0.95) ) # || varva==:δₕ ylims=(5, 4500), 
 		
 		push!(kakesplot, tmp)
-		# adding the plot to the mosaic final plot: ylim=yye_lims, 
+		# adding the plot to the mosaic final plot:
 	end
 	plot(kakesplot..., layout=(1,2), size=(900,400), dpi=600, bottom_margins=6Plots.mm)
 end
@@ -1881,7 +1968,7 @@ let vars=Dict(:ENSO=>enso_fft, :AO=>aoi_fft, :PDO=>pdo_fft)
 		pltj = @df sub_df plot(:νₖ, :Yₖ, seriestype=:stem, m=:+, lw=0.15(:Pₖ[1]), fillcolor=:grey,
 			xrot=45, xlim=(1/Plims[2], 1/Plims[1]), xticks=xString_Ticks, xflip=true, xtickdir=:out, xguidefontsize=12, xtickfontsize=10,
 			ylim=(0, 335), ytickdir=:out, yguidefontsize=12,
-			ann=(1/1.43, 290, "($(label_letter)) "*String(k)),
+			ann=(1/1.32, 290, text("($(label_letter)) "*String(k), halign=:left) ),
 			legend=false, top_margins=ifelse(label_letter=='a',0,-5)Plots.mm)
 		
 		k==:ENSO && scatter!(pltj, Θₚ.νₖ, [9], ms=5, m=:^, mc=:red, label="")
@@ -1972,31 +2059,60 @@ groupby(DBraw, :coupled) |> gf->combine(gf) do df
 	(Pa=quantile(pa, (.25, .5, .75)), Dz=quantile(dz, (.25, .5, .75)), N=length(pa))
 end
 
+# ╔═╡ ad29355c-59a0-494e-96fa-805853b6166d
+filter(!isnan, DBraw.Pa) |> d->quantile(d, (.25, .5, .75))
+
 # ╔═╡ 45c00bda-bc4c-43fd-9976-897cad5fe77e
-@df filter(d->d.ΔZ>(-9999) && isfinite(d.ΔZ), DB) density(:ΔZ, group=:coupled, lc=farben, trim=true, xscale=:identity, label=["D"  "C"], xlim=(-300,300)) # ; vline!([-38 15.9 70.9 ])ΔZ xlim=(235,278), 
+@df filter(d->d.ΔZ>(-9999) && isfinite(d.ΔZ), DBraw) density(:ΔZ, group=:coupled, lc=farben, trim=true, xscale=:identity, label=["D"  "C"], xlim=(-300,300)) # ; vline!([-38 15.9 70.9 ])ΔZ xlim=(235,278), 
 
 # ╔═╡ dca14b2e-bb63-4f1d-97f5-ac221c40b62e
-let kakes = @df filter(d->!isnan(d.μSIC), DB) fit(Histogram, :μSIC, nbins=101)
+let kakes = @df filter(d->!isnan(d.μSIC), DB) fit(Histogram, :μSIC, collect(0:10:100))
 	sic_cdf = cumsum(kakes.weights)/sum(kakes.weights)
 	sic_xx = kakes.edges[1] #[1:end-1]
 	cdf_plt = plot(sic_xx[1:end-1], sic_cdf)
-	per = [.25, .5, .75, 1] #[0.16, 0.25, 0.5, 1]
+	per = (0:0.2:1) #[.25, .5, .75, 1] #[0.16, 0.25, 0.5, 1]
 	idxii = [1]
-	foreach(enumerate(per)) do (j, pp)
-		ii = argmin(abs.(pp .- sic_cdf))
-		push!(idxii, ii)
-		println(pp, " $(sic_xx[idxii[end-1]]) - $(sic_xx[idxii[end]]) ", findall(sic_xx[idxii[end-1]] .< DB.μSIC .≤sic_xx[idxii[end]]) |> length )
-		vline!(cdf_plt, [sic_xx[ii]], label="$(pp) at $(sic_xx[ii])")
-		
+	siclims = quantile(DB.μSIC, per)
+	println(siclims)
+	for i ∈ 1:length(siclims)-1
+		println(siclims[i], "-", siclims[i+1], ": ", findall(siclims[i] .≤ DB.μSIC .≤ siclims[i+1]) |> length)
+		vline!(cdf_plt, [siclims[i]], label="$(siclims[i]) $(per[i])", l=:dash, lc=cgrad(:jet, categorical=true, 6)[i])
+		hline!(cdf_plt, [per[i]], label=false, l=:dash, lc=cgrad(:jet, categorical=true, 6)[i], yticks=(0:0.2:1))
 	end
+	# foreach(enumerate(per)) do (j, pp)
+	# 	ii = argmin(abs.(pp .- sic_cdf))
+	# 	push!(idxii, ii)
+	# 	println(pp, " $(sic_xx[idxii[end-1]]) - $(sic_xx[idxii[end]]) ", findall(sic_xx[idxii[end-1]] .< DB.μSIC .≤sic_xx[idxii[end]]) |> length )
+	# 	vline!(cdf_plt, [sic_xx[ii]], label="$(pp) at $(sic_xx[ii])")
+		
+	# end
 	cdf_plt
 end
 
-# ╔═╡ bcc0c25c-9f53-4dff-8da7-352a29a66852
-quantile(filter(!isnan, DB.μSIC), [.25, .5, .75]) #sum(kakes.weights)
-
 # ╔═╡ 0ba23046-f3b8-4c26-83d3-e06744c50587
-extrema(DB.date)
+let df25 = filter(d-> Date(2024,11,1) < d.date < Date(2024,12,30), DB)
+@df df25 plot(:date, [:lwp 100*(:T2m .- 273).+500])
+hline!([500], label=false)
+hline!([Nlu(df25.lwp, stats=:median)[1] ], label="median", ylim=(0, 600))
+end
+
+# ╔═╡ 1238f26a-6a0d-42d9-a40d-256c671d5398
+groupby(DB, :coupled) |> gdf->combine(gdf) do df
+	
+	ntot = filter(d->!isnan(d.clb), df) |> d->length(d.clb)
+	nlls = filter(d->!isnan(d.clb) && d.clb≤100, df) |> d->length(d.clb)
+	perlls = nlls/ntot
+	println(df.coupled[1], perlls)
+end
+
+# ╔═╡ 8dede2cb-914a-4d46-aafe-f6a47bc2ed4d
+findall(!isnan, DB.Tskin) |> length
+
+# ╔═╡ e4578098-49d1-4ccc-a5f3-e6e9319b591d
+groupby(DB, [:winter, :paₓ]) |> gb->combine(gb, :coupled=>sum) |> tt->plot(tt.winter, tt.coupled_sum, group=tt.paₓ)
+
+# ╔═╡ 26fd5073-f21d-4bf8-ba24-b00b6074dac1
+groupby(DB, :winter) |> gb->combine(gb, :coupled=>sum) |> tt->plot(tt.winter, tt.coupled_sum)
 
 # ╔═╡ 00000000-0000-0000-0000-000000000001
 PLUTO_PROJECT_TOML_CONTENTS = """
@@ -2376,9 +2492,9 @@ uuid = "8ba89e20-285c-5b6f-9357-94700520ee1b"
 
 [[deps.Distributions]]
 deps = ["AliasTables", "FillArrays", "LinearAlgebra", "PDMats", "Printf", "QuadGK", "Random", "SpecialFunctions", "Statistics", "StatsAPI", "StatsBase", "StatsFuns"]
-git-tree-sha1 = "03aa5d44647eaec98e1920635cdfed5d5560a8b9"
+git-tree-sha1 = "0b4190661e8a4e51a842070e7dd4fae440ddb7f4"
 uuid = "31c24e10-a181-5473-b8eb-7969acd0382f"
-version = "0.25.117"
+version = "0.25.118"
 
     [deps.Distributions.extensions]
     DistributionsChainRulesCoreExt = "ChainRulesCore"
@@ -3068,9 +3184,9 @@ version = "1.4.2"
 
 [[deps.Plots]]
 deps = ["Base64", "Contour", "Dates", "Downloads", "FFMPEG", "FixedPointNumbers", "GR", "JLFzf", "JSON", "LaTeXStrings", "Latexify", "LinearAlgebra", "Measures", "NaNMath", "Pkg", "PlotThemes", "PlotUtils", "PrecompileTools", "Printf", "REPL", "Random", "RecipesBase", "RecipesPipeline", "Reexport", "RelocatableFolders", "Requires", "Scratch", "Showoff", "SparseArrays", "Statistics", "StatsBase", "TOML", "UUIDs", "UnicodeFun", "UnitfulLatexify", "Unzip"]
-git-tree-sha1 = "dae01f8c2e069a683d3a6e17bbae5070ab94786f"
+git-tree-sha1 = "24be21541580495368c35a6ccef1454e7b5015be"
 uuid = "91a5bcdd-55d7-5caf-9e0b-520d859cae80"
-version = "1.40.9"
+version = "1.40.11"
 
     [deps.Plots.extensions]
     FileIOExt = "FileIO"
@@ -3088,9 +3204,9 @@ version = "1.40.9"
 
 [[deps.PlutoUI]]
 deps = ["AbstractPlutoDingetjes", "Base64", "ColorTypes", "Dates", "FixedPointNumbers", "Hyperscript", "HypertextLiteral", "IOCapture", "InteractiveUtils", "JSON", "Logging", "MIMEs", "Markdown", "Random", "Reexport", "URIs", "UUIDs"]
-git-tree-sha1 = "7e71a55b87222942f0f9337be62e26b1f103d3e4"
+git-tree-sha1 = "d3de2694b52a01ce61a036f18ea9c0f61c4a9230"
 uuid = "7f904dfe-b85e-4ff6-b463-dae2292396a8"
-version = "0.7.61"
+version = "0.7.62"
 
 [[deps.PooledArrays]]
 deps = ["DataAPI", "Future"]
@@ -3821,7 +3937,7 @@ version = "1.4.1+1"
 # ╟─3595bf88-4dbf-4c63-90e5-2feae1b78760
 # ╠═ae59d379-b47d-41fc-8958-4e9e1941b528
 # ╠═d1b9d2b9-6b08-4d81-8042-26bddf8f5e54
-# ╟─9fe20fcc-8de8-4f4c-aff2-214797c40ba0
+# ╠═9fe20fcc-8de8-4f4c-aff2-214797c40ba0
 # ╟─89809ea8-94a4-4158-8f23-b4a2322532b2
 # ╠═db52e7c0-5a8c-454a-bf1e-df9d377eff25
 # ╠═f5a31896-eeb0-4a49-9178-3995fde42a55
@@ -3845,32 +3961,33 @@ version = "1.4.1+1"
 # ╠═07d4b3f0-d37e-4b5a-ae8f-46033e57b112
 # ╠═76c14688-0be1-43a5-932e-352ebac308b4
 # ╠═6b11b88f-66e4-4630-a9a0-bc479cda43e1
-# ╠═bf4bc3ca-2137-45bc-a8fa-5e43594c366c
 # ╟─ac217227-a672-4f9c-80ff-277c57e473f9
 # ╠═49caf4c1-1ca2-483e-bfa7-36b98f3589be
 # ╠═8e883748-effd-4898-b6ea-24de538fc5e8
 # ╠═c5b02891-e561-4667-a07b-a29f52bb66c4
+# ╠═8846a5e6-ab5a-4156-bc59-b19a2033577f
 # ╠═264627a8-4975-4b75-b4de-136d9861aa0e
+# ╠═bb176db2-fd18-4a59-9021-d2396a030b6d
+# ╠═fa9e471b-3f58-459a-b99c-48cb1087e795
 # ╟─75609282-c67c-4794-a68b-94d32c004783
 # ╠═46c4e7cd-7d8a-49b7-abdd-1347692dcfd8
 # ╠═acad36c9-c463-47c2-9277-efea563847df
 # ╠═d04fad13-2fe2-4fa2-8528-24de8dafbbad
-# ╠═c0be60c9-6bd7-42c0-ab89-2a888873a024
 # ╠═f4f1cf08-4843-46ee-9da2-529b40321c94
 # ╠═f4e1159d-37ac-47b0-89ff-a9581aa3875f
 # ╠═848150e8-f3ed-4324-9964-8a6ada5df1ce
 # ╠═045d019e-9817-4bcc-8af8-6882ad43c615
 # ╠═47ca6697-a1f3-49ee-a8b8-b2938d1fe1a4
+# ╠═628ffc15-49dd-48d9-ac13-3ae2f700dee8
 # ╠═ecbebaf3-95b9-44e4-bd33-84d278ed1c06
-# ╠═22002a9b-e812-4148-846c-2debbe47b9f3
 # ╠═aab6bedd-c076-491f-b590-852f179e860b
-# ╠═7d062d2d-fec4-459a-840d-8b678f624c6c
 # ╠═6913d517-e07c-4962-9c6b-d090b1bb8faa
 # ╠═49654852-af74-468f-9ddd-cefa4f055907
 # ╠═6d4a626d-69a3-4538-8d6e-30e22a3e51ed
-# ╟─fb63d204-e954-4813-bdc5-b02b67c080c5
+# ╠═fb63d204-e954-4813-bdc5-b02b67c080c5
 # ╟─cd9c2bd6-50d2-4832-b35d-d4c40891d5e8
 # ╟─34a57d0f-b3f3-4ed3-9988-0fe50a7c4764
+# ╠═a09bbb85-edcc-4dac-a0b1-115ca73207f7
 # ╠═76063b20-0848-4fd3-9e53-d76149d3d115
 # ╟─6801d499-e203-45e3-b6a1-6e2878779787
 # ╟─d207a342-af32-4d36-b7d9-41505345ef87
@@ -3886,12 +4003,13 @@ version = "1.4.1+1"
 # ╟─a06b25e1-6897-4aab-bc5a-32b8bc29ebf7
 # ╠═3d45676a-8105-4e69-a520-605ee9cca2d1
 # ╠═7b9dfaec-9bd3-4608-a932-6c7bf2e6f019
-# ╟─d8b6dba6-aeb8-4d49-bf49-e576338f08e3
+# ╠═d8b6dba6-aeb8-4d49-bf49-e576338f08e3
 # ╟─230869e6-0f06-4757-aac3-31dbf883f334
 # ╠═82ccaaa0-f5d7-4c1f-93bc-37da45b2b048
 # ╠═72a99203-ff45-477f-8258-b4da6bf96dab
 # ╠═1e247533-a600-40e1-beeb-f2ade77a4998
 # ╠═4cb72574-9b2a-4482-b12e-642eb137c0d1
+# ╠═e13860c4-cd7a-4d37-9dc4-cb2c01f177ad
 # ╠═cbeeec75-64bb-4507-aa33-df9b1b90cad1
 # ╠═f5988ab9-9fb4-4209-837c-ec6328430307
 # ╟─59a25151-b64c-44f5-b3a0-0ad7d5697fc8
@@ -3901,7 +4019,8 @@ version = "1.4.1+1"
 # ╠═72d1dc70-cc6e-46b1-a9e5-1140a24cf6fc
 # ╠═53243445-6771-45bf-9b7e-4943cf8cef20
 # ╠═e533eb73-dfaf-4928-9be6-72340edca990
-# ╟─5d562554-9112-4856-b7a4-5e8ff22ea3d5
+# ╠═5d562554-9112-4856-b7a4-5e8ff22ea3d5
+# ╠═9e498f61-a297-4529-a7a1-1692e6cff222
 # ╠═2cc166c0-464b-41a4-be91-44d936f1eedf
 # ╠═4a5f18c6-3c6a-40f5-ad18-d1c46048ed3d
 # ╠═c1c5b1ac-fd5c-4734-aa9a-cfc18b640eea
@@ -3928,9 +4047,13 @@ version = "1.4.1+1"
 # ╠═1cb9ec34-8474-4af3-8877-87b396262ccf
 # ╠═3b2571ec-9e79-42c6-bcc8-c8e395506e17
 # ╠═98df9486-a69b-4280-ba6c-2b12106b989d
+# ╠═ad29355c-59a0-494e-96fa-805853b6166d
 # ╠═45c00bda-bc4c-43fd-9976-897cad5fe77e
 # ╠═dca14b2e-bb63-4f1d-97f5-ac221c40b62e
-# ╠═bcc0c25c-9f53-4dff-8da7-352a29a66852
 # ╠═0ba23046-f3b8-4c26-83d3-e06744c50587
+# ╠═1238f26a-6a0d-42d9-a40d-256c671d5398
+# ╠═8dede2cb-914a-4d46-aafe-f6a47bc2ed4d
+# ╠═e4578098-49d1-4ccc-a5f3-e6e9319b591d
+# ╠═26fd5073-f21d-4bf8-ba24-b00b6074dac1
 # ╟─00000000-0000-0000-0000-000000000001
 # ╟─00000000-0000-0000-0000-000000000002
