@@ -1,5 +1,11 @@
 #!/home/psgarfias/.local/bin/julia
 
+#=
+# Script to read the CSV daily files with information about the height of the maximum vertical gradient of WVT.
+# The wind direction at that height is then used to extract SIC from the +/-3° sector centerec in the azimuth
+# given by the wind direction. The extracted SIC is ten stored in daily JLD2 files.
+=#
+
 using NCDatasets
 using Navigation
 using Dates
@@ -21,7 +27,7 @@ const RVNAV_PATH = joinpath(homedir(), "LIM/data/B07/arctic-mosaic");
 #const LATLON_FILE = joinpath(PROD_PATH, "amsr2", "LongitudeLatitudeGrid-n3125-NorthWestPassage.h5"); # "LongitudeLatitudeGrid-n3125-ChukchiBeaufort.h5");
 const DATCSV_PATH = "/projekt2/ac3data/B07-data/utqiagvik-nsa/";  #joinpath(homedir(), "LIM/scripts/NSA-ac3-b07/CoupledCloud_Seaice/data");
 const DATOUT_PATH = joinpath(homedir(), "LIM/scripts/NSA-ac3-b07/SeaIce/data"); ## old: CoupledCloud_Seaice/data");
-const R_lim = 50e3;   # radius around RV polarstern
+const R_lim = 100e3;   # radius around RV polarstern
 const MAKEPLOTS = false
 
 # Define coordinates for the North Slope Alaska site:
@@ -39,10 +45,10 @@ println(now())
 #yy = 2020
 #mm = 4
 #dd = 15
-winter_jahr = 2020:2024;
-#datum = [Date(yy, 11)+Month(m) for yy ∈ winter_jahr for m ∈ 0:5]
-datum = (Date(2025,3),) # ((1,2025), ) #(12,2022), (1, 2023), (2,2023)) #, (1, 2023), (2, 2023),  (3,2023), (4,2023)) #(11,2021), 
-days = (1:8)
+winter_jahr = 2012:2024;
+datum = [Date(yy, 11)+Month(m) for yy ∈ winter_jahr for m ∈ 0:5]
+#datum = (Date(2025,3),) # ((1,2025), ) #(12,2022), (1, 2023), (2,2023)) #, (1, 2023), (2, 2023),  (3,2023), (4,2023)) #(11,2021), 
+days = (1:31)
 
 !isempty(ARGS) && foreach(ARGS) do argin
 	ex = Meta.parse(argin)
@@ -333,7 +339,8 @@ for data ∈ PRODUCTS
 
 end # over variables
 
-output_fn = @sprintf("SIC/%04d/seaice_winddir_%04d%02d%02d.jld2", yy, yy, mm ,dd);
+outsub_path = "SIC$(round(Int, 1f-3R_lim))km"
+output_fn = @sprintf("%04d/seaice_winddir_%04d%02d%02d.jld2", yy, yy, mm ,dd);
 
 ##println(output_tn)
 TO_SAVE = map(x->isempty(dist_wdir[x]), PRODUCTS) |> all
@@ -341,7 +348,7 @@ if TO_SAVE
     @warn("Data on $(wintertime) $(dd) is empty. Skipping...")
     continue
 else
-    save_object(joinpath(DATOUT_PATH, output_fn), dist_wdir)
+    save_object(joinpath(DATOUT_PATH, outsub_path, output_fn), dist_wdir)
 end
 
 end # over days
