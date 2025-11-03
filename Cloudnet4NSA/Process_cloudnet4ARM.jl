@@ -15,9 +15,9 @@ CATE_PATH = "/projekt2/ac3data/B07-data/$(site_campaign)/CloudNet/output/$(CLNTV
 PLOT_PATH = "/projekt2/ac3data/B07-data/$(site_campaign)/CloudNet/plot/$(CLNTVER)"; #"/home/psgarfias/LIM/data/CloudNet/plots/";
 
 # defining range of processing:
-years = (2024) #:2024)
-months = (12)
-days = (31)
+years = (2019) #:2024)
+months = (1)
+days = (19)
 
 !isempty(ARGS) && foreach(ARGS) do argin
 	ex = Meta.parse(argin)
@@ -28,7 +28,7 @@ println("** Calculating for the periods of years=$years, months=$months and days
 ##__PAC__PIPE__##
 # **** WICHTIG ******
 # definitions for Cloudnet output products:
-PROD_TYPE = "CEIL10m"; # "HSRL"; # or
+PROD_TYPE = "HSRL"; # "CEIL10m"; #or
 
 # defining ARM product to be used:
 ARMprod = Dict(
