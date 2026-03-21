@@ -21,13 +21,13 @@ include("aux_math_functions.jl");
 
 SEAICE = include(joinpath(homedir(), "LIM/repos/SEAICEtools.jl/src/SEAICEtools.jl"));
 
-const SATELLITE = "amsr2";  # "ssmis"; # (SSMIS is for 2011.11 to 2012.04)
+const SATELLITE = "amsr2";  # "ssmis"; #  (SSMIS is for 2011.11 to 2012.04)
 const PROD_PATH = "/projekt2/ac3data/B07-data/SeaIce";  # joinpath(homedir(), "LIM/data/B07/SeaIce");
 const RVNAV_PATH = joinpath(homedir(), "LIM/data/B07/arctic-mosaic");
 #const LATLON_FILE = joinpath(PROD_PATH, "amsr2", "LongitudeLatitudeGrid-n3125-NorthWestPassage.h5"); # "LongitudeLatitudeGrid-n3125-ChukchiBeaufort.h5");
 const DATCSV_PATH = "/projekt2/ac3data/B07-data/utqiagvik-nsa/";  #joinpath(homedir(), "LIM/scripts/NSA-ac3-b07/CoupledCloud_Seaice/data");
-const DATOUT_PATH = joinpath(homedir(), "LIM/scripts/NSA-ac3-b07/SeaIce/data"); ## old: CoupledCloud_Seaice/data");
-const R_lim = 100e3;   # radius around RV polarstern
+const DATOUT_PATH = joinpath(DATCSV_PATH, "SeaIce"); #homedir(), "LIM/scripts/NSA-ac3-b07/SeaIce/data"); ## old: CoupledCloud_Seaice/data");
+const R_lim = 75e3;   # radius around RV polarstern
 const MAKEPLOTS = false
 
 # Define coordinates for the North Slope Alaska site:
@@ -42,10 +42,9 @@ PRODUCTS = (:SIC,) # (:DIV, :LF, :SIC)
 dist_wdir = Dict(data=>Dict() for data ∈ PRODUCTS)
 
 println(now())
-#yy = 2020
-#mm = 4
-#dd = 15
+
 winter_jahr = 2012:2024;
+
 datum = [Date(yy, 11)+Month(m) for yy ∈ winter_jahr for m ∈ 0:5]
 #datum = (Date(2025,3),) # ((1,2025), ) #(12,2022), (1, 2023), (2,2023)) #, (1, 2023), (2, 2023),  (3,2023), (4,2023)) #(11,2021), 
 days = (1:31)
@@ -55,17 +54,19 @@ days = (1:31)
 	eval(ex)
 end
 
-for wintertime ∈ datum #, (5,2020)]
-        mm, yy = month(wintertime), year(wintertime)
-#mm = 11; yy=2019;
+for wintertime ∈ datum 
+    wintertime < Date(2012,5) && SATELLITE != "ssmis" && @error("wrong satellite!!! use SSMIS instead of $(SATELLITE) for the time period $(wintertime)") 
+    
+    mm, yy = month(wintertime), year(wintertime)
+    #mm = 11; yy=2019;
 
-## # reading 6 hour RV track coordinates to plot:
-## RVtrack = if MAKEPLOTS
-##         tmp = @sprintf("../RV_polarstern/data/RVpolarstern_track_%04d.jld2", yy)
-##         load(tmp, "RV")
-##     else
-##         nothing
-##     end
+    ## # reading 6 hour RV track coordinates to plot:
+    ## RVtrack = if MAKEPLOTS
+    ##         tmp = @sprintf("../RV_polarstern/data/RVpolarstern_track_%04d.jld2", yy)
+    ##         load(tmp, "RV")
+    ##     else
+    ##         nothing
+    ##     end
 
 
 for dd = days
@@ -186,7 +187,7 @@ for data ∈ PRODUCTS
         else
             sar = SEAICE.load.Data_Divergence_LeadFraction(lr_filen, idx_box)
         end
-        # converting to polar for data within the box
+        # converting to polar coordinates (azimuth, radius [km]) for data within the box. NOTE: ρ is in km
         θ, ρ = SEAICE.LonLat_To_CenteredPolar(Pstern, dat_coor[idx_box]); #!!!! out idx_box
         
         # Tim = findall(RV[:time][i_rv] .≤ winddir[!, :date] .< RV[:time][i_rv+1])
@@ -197,7 +198,7 @@ for data ∈ PRODUCTS
             # getting wind direction where to extract:
             θᵢ = winddir[iti, :wvtdir]-3; θₑ = winddir[iti, :wvtdir]+3;
             
-            idx_wd = findall((θᵢ .≤ θ .≤ θₑ) .& (ρ .≤ 50));  #!!! [idx_box]
+            idx_wd = findall((θᵢ .≤ θ .≤ θₑ) .& (ρ .≤ 1f-3R_lim));  #!!! [idx_box]
 
             # calculating statistics of box:
             LF = cbfaktor*sar[data]
@@ -226,7 +227,7 @@ for data ∈ PRODUCTS
             dist_wdir[data][:qq][:, iti] = qqLF
             
             # Adding SIC statistics for the whole sector:
-            idx_A=findall((θ.≥ θₗ₀ .|| θ.≤ θₗ₁) .& (ρ .≤ 50));
+            idx_A=findall((θ.≥ θₗ₀ .|| θ.≤ θₗ₁) .& (ρ .≤ 1f-3R_lim));
             Aμsic, Aσsic, Aqqsic = stats_𝑁ₗᵤ(filter(!isnan, sar[data][idx_A]), L=0, U=100)
            
             dist_wdir[data][:Aμ][iti] = Aμsic
@@ -242,7 +243,7 @@ for data ∈ PRODUCTS
             θᵢ, θₑ = let wvtdir = 359e0rand(1)[1]
                 wvtdir-3, wvtdir+3
             end
-            idx_rnd = findall((θᵢ .≤ θ .≤ θₑ) .& (ρ .≤ 50));
+            idx_rnd = findall((θᵢ .≤ θ .≤ θₑ) .& (ρ .≤ 1f-3R_lim));
             Rμsic, Rσsic, Rqqsic = stats_𝑁ₗᵤ(filter(!isnan, sar[data][idx_rnd]), L=0, U=100)
            
             dist_wdir[data][:Rμ][iti] = Rμsic

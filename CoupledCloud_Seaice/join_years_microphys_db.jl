@@ -12,7 +12,9 @@ Note: the merging happens in the order of years given by the variable jahre, so 
 =#
 using CSV, DataFrames
 
-PATH_DATA = "/projekt2/ac3data/B07-data/utqiagvik-nsa/csv_nsa/yearly";
+const Rsic = "SIC100km";
+
+PATH_DATA = joinpath("/projekt2/ac3data/B07-data/utqiagvik-nsa/csv_nsa", Rsic, "yearly");
 # jahre indicates the wintertime period, e.g. 2012 comprises of 2012.11, 2012.12, 2013.1, 2013.2, 2013.3, 2013.4
 jahre = (2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024)
 
@@ -25,7 +27,7 @@ ff = let dfiles=[]
     dfiles
 end
 
-outff = joinpath(PATH_DATA, "all_nsa_microphys_db_$(jahre[1])-$(jahre[end]+1).csv")
+outff = joinpath(PATH_DATA, "all_nsa_microphys_db$(Rsic)_$(jahre[1])-$(jahre[end]+1).csv")
 println(outff)
 
 dfs = (DataFrame∘CSV.File).(ff);
