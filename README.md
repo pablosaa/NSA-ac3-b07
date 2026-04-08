@@ -11,7 +11,15 @@ The data analysis comprise of the cloud remote sensing instrumentation for cloud
 * INTERPOLATESONDE Radiosonde data interpolated to fix grid,
 * RADFLUX shortwave and longwave up- and down-welling radiometers.
 
-The objective is to apply the methodology descrived in [Saavedra Garfias et al. (2023)](https://egusphere.copernicus.org/preprints/2023/egusphere-2023-623/) to the NSA site and characterize cloud properties under the influence of the sea ice conditions observed at the surrounding area of NSA. Sea ice concentration data is obtained by the satellite product ASI by AMSR2 provided by the [hhtps://seaice.uni-bremen.de](University of Bremen).
+The objective is to apply the methodology descrived in [Saavedra Garfias et al. (2023)](https://egusphere.copernicus.org/preprints/2023/egusphere-2023-623/) to the NSA site and characterize cloud properties under the influence of the sea ice conditions observed at the surrounding area of NSA. Sea ice concentration data is obtained by the satellite product ASI by AMSR2 provided by the [https://seaice.uni-bremen.de](University of Bremen).
+
+## Chain of Processing
+### Cloudnet
+First download the model files needed for Cloudnet, usually possible to find it using the API from [https://cloudnet.fmi.fi](cloudnet.fmi.fi)
+
+To convert the ARM data files to be used as input for Cloudnet, user the script ```Cloudnet4NSA/run_convertor.jl``` by editing the source code and selecting the convination of instruments to use:
+
+Once the NSA input files are converted to Cloudnet complaiant format, run the Cloudnet algorithm using the script ```Cloudnet4NSA/Process_cloudnet4ARM.jl```
 
 ## List of files and description:
 * ```SeaIce/distribution\_seaice\_winddir.jl``` 
