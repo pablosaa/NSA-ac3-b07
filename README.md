@@ -15,11 +15,38 @@ The objective is to apply the methodology descrived in [Saavedra Garfias et al. 
 
 ## Chain of Processing
 ### Cloudnet
-First download the model files needed for Cloudnet, usually possible to find it using the API from [https://cloudnet.fmi.fi](cloudnet.fmi.fi)
+First download the model files needed for Cloudnet, which can be done using the API from [https://cloudnet.fmi.fi](docs.cloudnet.fmi.fi)
 
-To convert the ARM data files to be used as input for Cloudnet, user the script ```Cloudnet4NSA/run_convertor.jl``` by editing the source code and selecting the convination of instruments to use:
+To convert the ARM data files to be used as input for Cloudnet, user the script: ```Cloudnet4NSA/run_convertor.jl``` by editing the source code and selecting the convination of instruments to use:
 
-Once the NSA input files are converted to Cloudnet complaiant format, run the Cloudnet algorithm using the script ```Cloudnet4NSA/Process_cloudnet4ARM.jl```
+Once the NSA input files are converted to Cloudnet complaiant format, run the Cloudnet algorithm using the script: ```Cloudnet4NSA/Process_cloudnet4ARM.jl```. This will use the converted ARM data for lidar, mwr, radar, and model data as indicated in the Dictionary:
+```julia
+# defining ARM product to be used:
+ARMprod = Dict(
+    :site => "utqiagvik-nsa", 					#"mosaic",
+    :radar => ("KAZR/ARSCL","KAZR/CORGE"),
+    :lidar => ("CEIL10m", "HSRL"),
+    :mwr => ("MWR/RET","MWR/LOS"),
+    :model => "ECMWF",
+    :radiosonde => "INTERPOLATEDSONDE",
+)
+```
+In case no model data for the ARM site is available in the Cloudnet servers, then as alternative it can be use the ARM ```INTERPOLATEDSONDE``` data.
+
+
+The default output path for Cloudnet NetCDF files is indicated below in the sub-folder description. The output path as well as the Clounet retrievals can be specified in source code ```Cloudnet4NSA/Process_cloudnet4ARM.jl``` by editing the variable:
+
+```julia
+CLNTprod = Dict(
+    :categorize => true,   		# for cloud categorization output (must be created for further analysis).
+    :classification => false,	# for cloud classification output (must be created for further analysis).
+    :lwc => true,				# cloud liquid water content output.
+    :iwc => true,				# cloud ice water content output.
+    :drizzle => true,			# precipitating water classification  as drizzle output.
+    :der => true,				# cloud droplets effective radius output.
+    :ier => true,				# cloud ice particle effective radius output.
+)
+```
 
 ## List of files and description:
 * ```SeaIce/distribution\_seaice\_winddir.jl``` 
