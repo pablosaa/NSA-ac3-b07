@@ -14,9 +14,10 @@ The data analysis comprise of the cloud remote sensing instrumentation for cloud
 The objective is to apply the methodology descrived in [Saavedra Garfias et al. (2023)](https://egusphere.copernicus.org/preprints/2023/egusphere-2023-623/) to the NSA site and characterize cloud properties under the influence of the sea ice conditions observed at the surrounding area of NSA. Sea ice concentration data is obtained by the satellite product ASI by AMSR2 provided by the [https://seaice.uni-bremen.de](University of Bremen).
 
 ## Chain of Processing
-### Cloudnet
+### 1. Download data
 First download the model files needed for Cloudnet, which can be done using the API from [https://cloudnet.fmi.fi](docs.cloudnet.fmi.fi)
 
+### Cloudnet
 To convert the ARM data files to be used as input for Cloudnet, user the script: ```Cloudnet4NSA/run_convertor.jl``` by editing the source code and selecting the convination of instruments to use:
 
 Once the NSA input files are converted to Cloudnet complaiant format, run the Cloudnet algorithm using the script: ```Cloudnet4NSA/Process_cloudnet4ARM.jl```. This will use the converted ARM data for lidar, mwr, radar, and model data as indicated in the Dictionary:
@@ -31,8 +32,7 @@ ARMprod = Dict(
     :radiosonde => "INTERPOLATEDSONDE",
 )
 ```
-In case no model data for the ARM site is available in the Cloudnet servers, then as alternative it can be use the ARM ```INTERPOLATEDSONDE``` data.
-
+In case any of the required instrument data files is missing, the script will skip the Cloudnet calculation for that day and indicate it as a message. Not all ARM sited have model data privided by the Cloudnet servers, for example the ARM site for MOSAiC is not available in the Cloudnet servers, then as alternative it can be use the ARM ```INTERPOLATEDSONDE``` data to recreate Cloudnet input as "model" data with the same parameters.
 
 The default output path for Cloudnet NetCDF files is indicated below in the sub-folder description. The output path as well as the Clounet retrievals can be specified in source code ```Cloudnet4NSA/Process_cloudnet4ARM.jl``` by editing the variable:
 
@@ -47,6 +47,14 @@ CLNTprod = Dict(
     :ier => true,				# cloud ice particle effective radius output.
 )
 ```
+### 4. Extract Sea Ice data for the region of interest.
+Once the Sea Ice is download for the same period of atmospheric parameters computed in previous section, then relevant sea ice data is extracted using the script:
+
+The main parameters to edit in the script are:
+
+### 3. Run atmospheric macro- micro-physical database.
+Once Cloudnet categorization output is completed, the relevant atmospheric parameters are computed using the script ```run_processing2daily_csv.jl```.
+In the script the relevant variables are ```winter_jahr::Vector{Int}``` where the range of wintertimes is specified, for example 2023 for the wintertime from November 2023 to April 2024.
 
 ## List of files and description:
 * ```SeaIce/distribution\_seaice\_winddir.jl``` 
