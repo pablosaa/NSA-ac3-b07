@@ -47,14 +47,18 @@ CLNTprod = Dict(
     :ier => true,				# cloud ice particle effective radius output.
 )
 ```
-### 4. Extract Sea Ice data for the region of interest.
-Once the Sea Ice is download for the same period of atmospheric parameters computed in previous section, then relevant sea ice data is extracted using the script:
-
-The main parameters to edit in the script are:
 
 ### 3. Run atmospheric macro- micro-physical database.
-Once Cloudnet categorization output is completed, the relevant atmospheric parameters are computed using the script ```run_processing2daily_csv.jl```.
+Once Cloudnet categorization output is completed, the relevant atmospheric parameters are computed using the script ```CoupledCloud_Seaice/run_processing2daily_csv.jl```.
 In the script the relevant variables are ```winter_jahr::Vector{Int}``` where the range of wintertimes is specified, for example 2023 for the wintertime from November 2023 to April 2024.
+From that variable the winter time is assigned as coupled variables for year and month, e.g. ```datum = Date(year, month)``` where  ```year``` ranges from 2023 to 2024 and ```month``` ranges from ```11:4``` representing the range of months from November to April next year.
+
+The output is a daily CSV files with atmospheric parameters in columns at a common temporal resolution of 1 minute.
+
+### 4. Extract Sea Ice data for the region of interest.
+Once the Sea Ice data is download for the same period of atmospheric parameters computed in CSV daily files (previous section), the relevant sea ice data is extracted using the script: ```SeaIce/distribution_seaice_winddir.jl``` 
+
+The main parameters to edit in the script are: 
 
 ## List of files and description:
 * ```SeaIce/distribution\_seaice\_winddir.jl``` 
