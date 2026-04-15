@@ -59,6 +59,43 @@ The output is a daily CSV files with atmospheric parameters in columns at a comm
 Once the Sea Ice data is download for the same period of atmospheric parameters computed in CSV daily files (previous section), the relevant sea ice data is extracted using the script: ```SeaIce/distribution_seaice_winddir.jl``` 
 
 The main parameters to edit in the script are: 
+```julia
+# Define coordinates for the North Slope Alaska site (or any other place of interest):
+nsa_lat = 71.323e0;
+nsa_lon = -156.609e0;
+# Define the azimuth angles for the sector to consider (avoiding Land):
+θₗ₀ = 235e0;
+θₗ₁ = 110e0;
+
+# Define the radiuns around the center to calculate Sea Ice (in m):
+const R_lim = 50e3;   # radius around NSA location, e.g. 50 km
+
+# det the satellite to use (previously downloaded Sea Ice data):
+const SATELLITE = "amsr2";  # "ssmis"; #  (SSMIS is for 2011.11 to 2012.04)
+
+# Define the Sea Ice product to consider, for AMSR2 for example SIC.
+PRODUCTS = (:SIC,) # (:DIV, :LF, :SIC)
+# Define the wintertime yearss, e.g. 2023:2024 for wintertimes
+# from November 2023 to April 2024 and November 2024 to April 2025
+winter_jahr = 2023:2024;
+
+```
+
+The script outputs daily Julida Language Data 2 files (JLD2) with a minute time resolution with the information about mean Sea Ice within +/- 3° sector with 50 km radius and azimuth modulated by the maximum water vapour transport direction (optained from the previous CSV daily files). 
+
+### 5. Joining dataset from atmospheric parameters and Sea Ice into a common single CSV file
+The Sea Ice and atmospheric paramters data set are merged into a single file using the script ```create_nsa_microphys_db.jl```.
+
+This script needs:
+* daily CSV data files after processing for WVT and cloud layers from Cloudnet
+* JLD2 sea ice concentration averages at the direction of the WVT
+
+This script will output:
+* a yearly CSV data file e.g.  all_nsa_microphys_db_2012-2013.csv
+which contains the database from wintertime 2012 Nov to 2013 April with
+atmospheric, cloud, and sea ice information merged.
+
+The yearly CSV files can further be merged in a range of years using the script:
 
 ## List of files and description:
 * ```SeaIce/distribution\_seaice\_winddir.jl``` 
