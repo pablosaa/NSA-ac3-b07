@@ -24,7 +24,7 @@ using ARMtools
 # Statistical analysis for NSA coupled/decoupled micro-physical properties
 
 # Defining the JLD2 files with SIC radius of e.g. 50km, 75km, or 100km
-const Rsic = "SIC100km"
+const Rsic = "SIC50km"
 
 # Defining data path
 const BASE_PATH = joinpath(homedir(), "LIM/scripts/NSA-ac3-b07")
@@ -34,7 +34,7 @@ const MIPHY_PATH = joinpath(DATA_PATH, "csv_nsa", Rsic)
 
 
 # defining the wintertime to process e.g. for year yy:Nov, Dec to yy+1:Jan, Feb, Mar, Apr.
-years = (2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024)
+years = (2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025)
 
 
 for jahr ∈ years

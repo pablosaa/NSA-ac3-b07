@@ -18,11 +18,11 @@ using CloudnetTools.ARM
 # * radar => "KAZR/ARSCL" or "KAZR/CORGE"
 # * radiometer => "MWR/RET" or "MWR/LOS"
 # * model => "ECMWF" or "INTERPOLATESONDE"
-NSAproduct = Dict(#:radar => ("KAZR/ARSCL", "KAZR/CORGE"),  #",
+NSAproduct = Dict(:radar => ("KAZR/ARSCL", "KAZR/CORGE"),  #",
                   #:ceilometer => "CEIL10m", #
-                  :lidar => "HSRL", # "CEIL10m", #                   
+                  :lidar => "CEIL10m", # "HSRL", #                   
                   :model => "",
-                  #:mwr => ("MWR/RET", "MWR/LOS"), #
+                  :mwr => ("MWR/RET", "MWR/LOS"), #
                   #:radiosonde => "INTERPOLATEDSONDE",
                  );
 
@@ -35,9 +35,9 @@ input_params = Dict(
    );
 
 # Default values to use for range of dates to run the convertor:
-jahre = (2019)
-monaten = (1)
-tage = (19) #:15)
+jahre = (2025)
+monaten = (4,)
+tage = (1:31) #:15)
 
 # overwriting the input arguments to julia variables:
 # jahre, monaten, tage. If not specified then default values are used.

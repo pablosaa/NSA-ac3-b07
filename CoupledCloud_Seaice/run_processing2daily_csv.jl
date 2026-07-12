@@ -2,7 +2,8 @@
 
 #= Script to run over all cases for mosaic and create the daily CSV with
  CBH,CTH, CBT, CTT
-=#
+        At this stage only atmospheric parameters are computed, the Sea Ice data is not yet needed.
+ =#
 
 # general packages:
 using Dates
@@ -41,7 +42,7 @@ if ADDAOI
 end
 
 
-winter_jahr = 2011:2024;
+winter_jahr = 2025:2025;
 #( (winter_jahr,11), (winter_jahr,12), (,1), (2019,2), (2019,3), (2019,4))
 days = (1:31) #,21,22,23,24,25,26,27,28,29,30) #21  #18 #28 #6
 
@@ -50,8 +51,8 @@ days = (1:31) #,21,22,23,24,25,26,27,28,29,30) #21  #18 #28 #6
 	eval(ex)
 end
 
-datum = [Date(yy, 11)+Month(m) for yy ∈ winter_jahr for m ∈ 0:5]
-#datum = [Date(2025,3)] #, Date(2024,3), Date(2024,4)]
+# datum = [Date(yy, 11)+Month(m) for yy ∈ winter_jahr for m ∈ 0:5]
+datum = [Date(2026,1), Date(2026,2), Date(2026,3)] #, Date(2024,3), Date(2024,4)]
 
 for heute in datum
     yy, mm = year(heute), month(heute)
