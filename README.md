@@ -16,6 +16,18 @@ The objective is to apply the methodology descrived in [Saavedra Garfias et al. 
 ## Chain of Processing
 ### 1. Download data
 First download the model files needed for Cloudnet, which can be done using the API from [https://cloudnet.fmi.fi](docs.cloudnet.fmi.fi)
+To automatically download model files, the following script can be used:
+``
+> ./Cloudnet4NSA/getMODEL_cloudnetFMI.sh
+``
+the relevant variables within the script are:
+```
+set SITE='arm-nsa'
+set MODEL='ecmwf' # 'icon-iglo-108-119'
+set OUT_PATH=/projekt2/ac3data/B07-data/utqiagvik-nsa/CloudNet/input/ECMWF
+set years=(2026)
+set months=(1 2 3 4)
+```
 
 ### Cloudnet
 To convert the ARM data files to be used as input for Cloudnet, user the script: ```Cloudnet4NSA/run_convertor.jl``` by editing the source code and selecting the convination of instruments to use:
@@ -127,7 +139,7 @@ The ARM source data is located at the LIM servers in the RemArc working group lo
 The data is sorted in the above folder according to ```instrument/{product}/year``` sub-folders, e.g. ```KAZR/ARSCL/2023``` or ```CEIL10m/2023```.
 
 ---
-(c) Pablo Saavedra Garfias<br>
+2024 (c) Pablo Saavedra Garfias<br>
 [pablo.saavedra@uni-leipzig.de](mailto:pablo.saavedra@uni-leipzig.de)<br>
 LIM<br>
 Faculty of Physics and Geosciences<br>
