@@ -17,16 +17,16 @@ The objective is to apply the methodology descrived in [Saavedra Garfias et al. 
 ### 1. Download data
 First download the model files needed for Cloudnet, which can be done using the API from [https://cloudnet.fmi.fi](docs.cloudnet.fmi.fi)
 To automatically download model files, the following script can be used:
-``
-> ./Cloudnet4NSA/getMODEL_cloudnetFMI.sh
-``
-the relevant variables within the script are:
 ```
-set SITE='arm-nsa'
-set MODEL='ecmwf' # 'icon-iglo-108-119'
-set OUT_PATH=/projekt2/ac3data/B07-data/utqiagvik-nsa/CloudNet/input/ECMWF
-set years=(2026)
-set months=(1 2 3 4)
+> ./Cloudnet4NSA/getMODEL_cloudnetFMI.sh
+```
+the relevant variables to edit in the script are:
+```
+set SITE='arm-nsa'  # site for model to download
+set MODEL='ecmwf' # or 'icon-iglo-108-119'
+set OUT_PATH=/projekt2/ac3data/B07-data/utqiagvik-nsa/CloudNet/input/ECMWF  # output path in local server to store data
+set years=(2026)  # year or years to download
+set months=(1 2 3 4)  # months to download
 ```
 
 ### Cloudnet
